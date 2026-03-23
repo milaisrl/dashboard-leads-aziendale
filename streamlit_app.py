@@ -10,7 +10,7 @@ st.markdown("Carica i file mensili per generare le statistiche.")
 # --- SIDEBAR PER CARICAMENTO E INPUT ---
 with st.sidebar:
     st.header("Caricamento Dati")
-    file_analisi = st.file_ acorns_uploader("1. ANALISI (Excel/CSV)", type=['xlsx', 'csv'])
+    file_analisi = st.file_uploader("1. ANALISI (Excel/CSV)", type=['xlsx', 'csv'])
     file_lista = st.file_uploader("2. LISTA LEADS (Excel/CSV)", type=['xlsx', 'csv'])
     file_sopralluoghi = st.file_uploader("3. SOPRALLUOGHI (Excel/CSV)", type=['xlsx', 'csv'])
     file_offerte = st.file_uploader("4. OFFERTE (Excel/CSV)", type=['xlsx', 'csv'])
