@@ -8,33 +8,66 @@ import io
 # Configurazione Pagina
 st.set_page_config(page_title="CRM & Marketing Analytics PRO", layout="wide")
 
-# --- 1. FUNZIONE GENERAZIONE PDF ---
+# --- 1. FUNZIONE GENERAZIONE PDF CON LOGO ---
 def genera_pdf(nome_agente, dati_agente, periodo):
     pdf = FPDF()
     pdf.add_page()
-    pdf.set_font("Arial", "B", 16)
-    pdf.cell(190, 10, f"Report Performance: {nome_agente}", ln=True, align='C')
+    
+    # --- AGGIUNTA LOGO ---
+    # Parametri: percorso file, x, y, larghezza (w)
+    # Prova con w=40 o 50 a seconda della forma del tuo logo
+    try:
+        pdf.image("logo.png", x=10, y=8, w=40) 
+    except:
+        # Se il file non esiste o il nome è diverso, il PDF verrà creato senza logo
+        # invece di far crashare l'app.
+        pdf.set_font("Arial", "I", 8)
+        pdf.cell(190, 5, "[Logo Aziendale non trovato]", ln=True, align='L')
+
+    # Titolo e Intestazione (spostati un po' a destra/sotto per non sovrapporsi al logo)
+    pdf.set_font("Arial", "B", 18)
+    pdf.ln(10) # Salto riga per distanziarsi dal bordo superiore
+    pdf.cell(190, 10, f"REPORT PERFORMANCE AGENTE", ln=True, align='C')
+    
+    pdf.set_font("Arial", "B", 14)
+    pdf.set_text_color(100, 100, 100) # Grigio scuro
+    pdf.cell(190, 10, f"{nome_agente}", ln=True, align='C')
+    
+    pdf.set_font("Arial", "I", 11)
+    pdf.cell(190, 7, f"Periodo di riferimento: {periodo}", ln=True, align='C')
+    pdf.ln(15) # Spazio prima della tabella
+    
+    # --- TABELLA DATI ---
+    pdf.set_text_color(0, 0, 0) # Torna al nero
+    pdf.set_draw_color(50, 50, 50)
+    pdf.set_line_width(0.5)
+    
+    # Intestazione Tabella
+    pdf.set_fill_color(230, 230, 230)
+    pdf.set_font("Arial", "B", 12)
+    pdf.cell(95, 12, "Indicatore (KPI)", 1, 0, 'C', True)
+    pdf.cell(95, 12, "Risultato", 1, 1, 'C', True)
+    
+    # Dati Corpo Tabella
     pdf.set_font("Arial", "", 12)
-    pdf.cell(190, 10, f"Periodo: {periodo}", ln=True, align='C')
-    pdf.ln(10)
-    
-    # Tabella Performance
-    pdf.set_fill_color(200, 220, 255)
-    pdf.cell(95, 10, "Metrica", 1, 0, 'C', True)
-    pdf.cell(95, 10, "Valore", 1, 1, 'C', True)
-    
     metriche = [
-        ("Leads Assegnati", str(dati_agente['Leads'])),
-        ("Sopralluoghi", str(dati_agente['Sopralluoghi'])),
-        ("Conversione Lead/Sopr.", f"{dati_agente['Conv_Perc']}%"),
-        ("Fatturato Totale", f"{dati_agente['Fatturato']:,.2f} EUR"),
-        ("Budget Pubblicitario", f"{dati_agente['Budget']:,.2f} EUR"),
-        ("ROI (Ritorno)", f"{dati_agente['ROI']}x")
+        ("Leads Assegnati", f"{dati_agente['Leads']}"),
+        ("Sopralluoghi Effettuati", f"{dati_agente['Sopralluoghi']}"),
+        ("Tasso di Conversione", f"{dati_agente['Conv_Perc']}%"),
+        ("Fatturato Generato", f"{dati_agente['Fatturato']:,.2f} EUR"),
+        ("Budget Marketing", f"{dati_agente['Budget']:,.2f} EUR"),
+        ("ROI (Ritorno Investimento)", f"{dati_agente['ROI']}x")
     ]
     
     for m, v in metriche:
-        pdf.cell(95, 10, m, 1)
-        pdf.cell(95, 10, v, 1, 1)
+        pdf.cell(95, 10, f" {m}", 1) # Spazio iniziale per padding
+        pdf.cell(95, 10, f"{v} ", 1, 1, 'R') # Allineato a destra
+        
+    # --- PIE' DI PAGINA ---
+    pdf.set_y(-30)
+    pdf.set_font("Arial", "I", 8)
+    pdf.set_text_color(150, 150, 150)
+    pdf.cell(190, 10, "Documento generato automaticamente dal sistema CRM Analytics.", 0, 0, 'C')
         
     return pdf.output(dest='S').encode('latin-1')
 
