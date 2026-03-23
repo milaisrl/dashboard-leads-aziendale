@@ -26,6 +26,7 @@ st.markdown("""
         background-color: #000000;
         color: white;
         border-radius: 5px;
+        width: 100%;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -50,14 +51,24 @@ def get_gsheet_client():
         creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
         client = gspread.authorize(creds)
         return client.open("Domei_Database")
-    except Exception as e:
+    except Exception:
         return None
 
 # --- 3. INIZIALIZZAZIONE SESSION STATE ---
 if 'db_budget' not in st.session_state:
     st.session_state.db_budget = pd.DataFrame(columns=["Agente", "Mese", "Budget"])
 
-# --- 4. SIDEBAR & CARICAMENTO ---
+# --- 4. HEADER ---
+col_logo, col_title = st.columns([1, 5])
+with col_logo:
+    if os.path.exists("logo.png"):
+        st.image("logo.png", width=120)
+    else:
+        st.header("DOMEI")
+with col_title:
+    st.title("Business Intelligence & Marginalità")
+
+# --- 5. SIDEBAR CARICAMENTO ---
 with st.sidebar:
     st.header("📁 Caricamento File")
     f_anal = st.file_uploader("1. ANALISI", type=['xlsx', 'csv'])
@@ -80,35 +91,32 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
     dfs = {"a": load_and_clean(f_anal), "l": load_and_clean(f_list), "s": load_and_clean(f_sopr), 
            "c": load_and_clean(f_cant), "f": load_and_clean(f_fatt)}
 
-    # Normalizzazione chiavi
     for k in dfs:
         col_name = next((c for c in ['Cliente', 'Rag. Soc.', 'Ragione_sociale'] if c in dfs[k].columns), dfs[k].columns[0])
         dfs[k]['key'] = dfs[k][col_name].apply(normalize_name)
 
-    # Arricchimento dati
     master = dfs['a'][dfs['a']['Tipo'] != 'WF Contatto cliente'].copy()
     master = pd.merge(master, dfs['l'].drop_duplicates('key')[['key', 'Agente', 'Sorgente']], on='key', how='left')
     master['Agente'] = master['Agente'].fillna("NON ASSEGNATO").astype(str)
     master['Sopralluogo'] = master['key'].isin(dfs['s']['key'].unique())
     master['Cantiere'] = master['key'].isin(dfs['c']['key'].unique())
     
-    # --- 5. TABS ---
     t_perf, t_mkt, t_bud, t_marg = st.tabs(["📊 Performance", "📢 Marketing", "💰 Budget", "🏗️ Marginalità"])
 
     # --- TAB PERFORMANCE ---
     with t_perf:
-        col_f1, col_f2 = st.columns(2)
-        with col_f1: ag_sel = st.selectbox("Agente", sorted(master['Agente'].unique()))
-        with col_f2: per_sel = st.selectbox("Periodo", ["STORICO TOTALE"] + sorted(master['Mese_Anno'].dropna().unique(), reverse=True))
+        c1, c2 = st.columns(2)
+        with c1: ag_sel = st.selectbox("Agente", sorted(master['Agente'].unique()))
+        with c2: per_sel = st.selectbox("Periodo", ["STORICO TOTALE"] + sorted(master['Mese_Anno'].dropna().unique(), reverse=True))
         
         df_ag = master[master['Agente'] == ag_sel]
         if per_sel != "STORICO TOTALE": df_ag = df_ag[df_ag['Mese_Anno'] == per_sel]
         
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Leads", len(df_ag))
-        c2.metric("Sopralluoghi", int(df_ag['Sopralluogo'].sum()))
-        c3.metric("Contratti", int(df_ag['Cantiere'].sum()))
-        c4.metric("Conversion", f"{round(df_ag['Cantiere'].sum()/len(df_ag)*100,1) if len(df_ag)>0 else 0}%")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Leads", len(df_ag))
+        m2.metric("Sopralluoghi", int(df_ag['Sopralluogo'].sum()))
+        m3.metric("Contratti", int(df_ag['Cantiere'].sum()))
+        m4.metric("Conversion", f"{round(df_ag['Cantiere'].sum()/len(df_ag)*100,1) if len(df_ag)>0 else 0}%")
         
         g1, g2 = st.columns([2,3])
         with g1:
@@ -126,73 +134,60 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
         m_sum.columns = ['Sorgente', 'Leads', 'Contratti']
         col_m1, col_m2 = st.columns([1,1])
         with col_m1:
-            st.plotly_chart(px.pie(m_sum, values='Leads', names='Sorgente', hole=.4, color_discrete_sequence=px.colors.qualitative.Grey), use_container_width=True)
+            # CORRETTO: px.colors.qualitative.Greys (con la 's')
+            st.plotly_chart(px.pie(m_sum, values='Leads', names='Sorgente', hole=.4, color_discrete_sequence=px.colors.qualitative.Prism), use_container_width=True)
         with col_m2:
             st.dataframe(m_sum, use_container_width=True)
 
-    # --- TAB BUDGET (LA TUA RICHIESTA) ---
+    # --- TAB BUDGET (SICURA E AUTOMATICA) ---
     with t_bud:
-        st.subheader("Configurazione Investimento Mensile")
-        
-        # 1. Scelta Mese/Anno
+        st.subheader("Gestione Investimenti Marketing")
         mesi_disp = sorted(master['Mese_Anno'].dropna().unique(), reverse=True)
-        mese_sel = st.selectbox("Seleziona il mese per cui inserire i budget:", mesi_disp)
+        mese_sel = st.selectbox("Seleziona Mese/Anno:", mesi_disp)
         
-        # 2. Generazione lista agenti reali
+        # Agenti reali filtrati (escluso NON ASSEGNATO)
         agenti_reali = sorted([a for a in master['Agente'].unique() if a != "NON ASSEGNATO"])
         
-        # Preparazione DataFrame per l'editor
-        current_budgets = st.session_state.db_budget[st.session_state.db_budget['Mese'] == mese_sel]
-        
+        # Recupero dati esistenti nel session state
         input_data = []
         for ag in agenti_reali:
-            # Cerchiamo se esiste già un valore salvato per questo mese/agente
-            esistente = current_budgets[current_budgets['Agente'] == ag]['Budget'].values
-            valore = esistente[0] if len(esistente) > 0 else 0.0
+            esistente = st.session_state.db_budget[(st.session_state.db_budget['Agente'] == ag) & (st.session_state.db_budget['Mese'] == mese_sel)]
+            valore = esistente['Budget'].values[0] if not esistente.empty else 0.0
             input_data.append({"Agente": ag, "Mese": mese_sel, "Budget": valore})
         
         df_input = pd.DataFrame(input_data)
         
-        st.info(f"Inserisci gli investimenti marketing per **{mese_sel}**. I nomi degli agenti sono bloccati per evitare errori.")
+        st.info(f"Modifica i budget per gli agenti attivi nel mese di **{mese_sel}**.")
         
-        # 3. L'Editor
         edited_df = st.data_editor(df_input, column_config={
             "Agente": st.column_config.Column(disabled=True),
             "Mese": st.column_config.Column(disabled=True),
             "Budget": st.column_config.NumberColumn(format="€ %.2f")
         }, use_container_width=True, key=f"editor_{mese_sel}")
 
-        # 4. Salvataggio in Session State
-        if st.button("💾 Conferma Budget per questo mese"):
-            # Rimuoviamo i vecchi dati di quel mese e aggiungiamo i nuovi
-            st.session_state.db_budget = pd.concat([
-                st.session_state.db_budget[st.session_state.db_budget['Mese'] != mese_sel],
-                edited_df
-            ])
-            st.success(f"Budget di {mese_sel} salvati in memoria!")
+        if st.button("💾 Salva Budget in Memoria"):
+            # Aggiorniamo il database interno
+            temp_db = st.session_state.db_budget[st.session_state.db_budget['Mese'] != mese_sel]
+            st.session_state.db_budget = pd.concat([temp_db, edited_df], ignore_index=True)
+            st.success("Dati aggiornati per i calcoli di marginalità!")
 
     # --- TAB MARGINALITÀ ---
     with t_marg:
-        st.subheader("Analisi Profitti per Contratto")
-        # Unione Contratti + Agenti
+        st.subheader("Riepilogo Marginalità per Cantiere")
         df_c = dfs['c'][['key', 'Rag. Soc.', 'Mese_Anno', 'Totale']].copy()
         df_c['Valore'] = df_c['Totale'].apply(clean_currency)
         df_m = pd.merge(df_c, master[['key', 'Agente']].drop_duplicates('key'), on='key', how='left')
         
-        # Calcolo Quota Marketing
-        def get_quota(row):
-            bud = st.session_state.db_budget[(st.session_state.db_budget['Agente'] == row['Agente']) & 
-                                             (st.session_state.db_budget['Mese'] == row['Mese_Anno'])]
-            if not bud.empty:
-                n_contratti = len(df_m[(df_m['Agente'] == row['Agente']) & (df_m['Mese_Anno'] == row['Mese_Anno'])])
-                return bud['Budget'].values[0] / n_contratti if n_contratti > 0 else 0
+        # Calcolo quota marketing dinamico
+        def calc_quota(r):
+            match = st.session_state.db_budget[(st.session_state.db_budget['Agente'] == r['Agente']) & (st.session_state.db_budget['Mese'] == r['Mese_Anno'])]
+            if not match.empty:
+                n_contratti = len(df_m[(df_m['Agente'] == r['Agente']) & (df_m['Mese_Anno'] == r['Mese_Anno'])])
+                return match['Budget'].values[0] / n_contratti if n_contratti > 0 else 0
             return 0
 
-        df_m['Quota_Mkt'] = df_m.apply(get_quota, axis=1)
-        
-        st.write("Inserisci i costi vivi per ogni cantiere:")
-        # Qui potresti aggiungere gspread per salvare/caricare manodopera e materiali
-        st.data_editor(df_m[['Rag. Soc.', 'Agente', 'Valore', 'Quota_Mkt']], use_container_width=True)
+        df_m['Quota_Mkt'] = df_m.apply(calc_quota, axis=1)
+        st.dataframe(df_m[['Rag. Soc.', 'Agente', 'Mese_Anno', 'Valore', 'Quota_Mkt']], use_container_width=True)
 
 else:
-    st.warning("Carica tutti i 6 file per attivare la dashboard.")
+    st.info("👋 Benvenuto in Domei Intelligence. Carica i 6 file per iniziare.")
