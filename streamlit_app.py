@@ -9,7 +9,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # --- 1. CONFIGURAZIONE PAGINA & BRANDING ---
 st.set_page_config(page_title="Domei Intelligence", layout="wide")
 
-# Stile CSS Custom per rispecchiare il Brand Manual (Nero e Rosso Domei)
+# Stile CSS per rispecchiare il Brand Manual Domei
 st.markdown("""
     <style>
     .main { background-color: #ffffff; }
@@ -88,14 +88,16 @@ st.divider()
 # --- 5. SIDEBAR CARICAMENTO ---
 with st.sidebar:
     st.header("📁 Importazione File")
-    f_anal = st.file_uploader("1. ANALISI", type=['xlsx', 'csv'])
-    f_list = st.file_uploader("2. LISTA LEADS", type=['xlsx', 'csv'])
-    f_sopr = st.file_uploader("3. SOPRALLUOGHI", type=['xlsx', 'csv'])
-    f_offe = st.file_uploader("4. OFFERTE", type=['xlsx', 'csv'])
-    f_cant = st.file_uploader("5. ORDINI CANTIERI", type=['xlsx', 'csv'])
-    f_fatt = st.file_uploader("6. FATTURATO", type=['xlsx', 'csv'])
+    files = {
+        "a": st.file_uploader("1. ANALISI", type=['xlsx', 'csv']),
+        "l": st.file_uploader("2. LISTA LEADS", type=['xlsx', 'csv']),
+        "s": st.file_uploader("3. SOPRALLUOGHI", type=['xlsx', 'csv']),
+        "o": st.file_uploader("4. OFFERTE", type=['xlsx', 'csv']),
+        "c": st.file_uploader("5. ORDINI CANTIERI", type=['xlsx', 'csv']),
+        "f": st.file_uploader("6. FATTURATO", type=['xlsx', 'csv'])
+    }
 
-if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
+if all(files.values()):
     def load_and_clean(f):
         df = pd.read_csv(f, sep=None, engine='python') if f.name.endswith('.csv') else pd.read_excel(f)
         df.columns = df.columns.astype(str).str.strip()
@@ -105,23 +107,21 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
             df['Mese_Anno'] = df['Data_Ref'].dt.strftime('%Y-%m')
         return df
 
-    dfs = {"a": load_and_clean(f_anal), "l": load_and_clean(f_list), "s": load_and_clean(f_sopr), 
-           "o": load_and_clean(f_offe), "c": load_and_clean(f_cant), "f": load_and_clean(f_fatt)}
+    dfs = {k: load_and_clean(v) for k, v in files.items()}
 
     for k in dfs:
-        col_name = 'Cliente' if 'Cliente' in dfs[k] else 'Rag. Soc.' if 'Rag. Soc.' in dfs[k] else \
-                   'Ragione_sociale' if 'Ragione_sociale' in dfs[k] else 'Descrizione conto'
+        col_name = next((c for c in ['Cliente', 'Rag. Soc.', 'Ragione_sociale', 'Descrizione conto'] if c in dfs[k].columns), dfs[k].columns[0])
         dfs[k]['key'] = dfs[k][col_name].apply(normalize_name)
 
     dfs['c']['Valore_Contratto'] = dfs['c']['Totale'].apply(clean_currency)
     dfs['f']['Valore_Netto'] = dfs['f']['Imponibile in EUR' if 'Imponibile in EUR' in dfs['f'].columns else 'Totale'].apply(clean_currency)
 
+    # Costruzione Master Data
     master = dfs['a'][dfs['a']['Tipo'] != 'WF Contatto cliente'].copy()
     master = pd.merge(master, dfs['l'].drop_duplicates('key')[['key', 'Agente', 'Sorgente']], on='key', how='left')
     
     sopr_map = dfs['s'].drop_duplicates('key').set_index('key')['Creato da'].to_dict()
     master['Agente'] = master.apply(lambda r: r['Agente'] if pd.notna(r['Agente']) and str(r['Agente']).strip() != "" else sopr_map.get(r['key'], "NON ASSEGNATO"), axis=1)
-    # Assicuriamoci che tutti i valori in Agente siano stringhe per l'ordinamento
     master['Agente'] = master['Agente'].fillna("NON ASSEGNATO").astype(str)
     
     master['Sopralluogo'] = master['key'].isin(dfs['s']['key'].unique())
@@ -133,68 +133,44 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
 
     with t_perf:
         st.subheader("🎯 Analisi Performance Agenti")
-        
-        # Filtri in riga
         c1, c2 = st.columns(2)
         with c1:
-            lista_agenti = sorted([str(x) for x in master['Agente'].unique() if x is not None])
+            lista_agenti = sorted([str(x) for x in master['Agente'].unique()])
             ag_sel = st.selectbox("Seleziona Agente", lista_agenti)
         with c2:
             periodi = ["STORICO TOTALE"] + sorted([str(x) for x in master['Mese_Anno'].dropna().unique()], reverse=True)
             per_sel = st.selectbox("Seleziona Periodo", periodi)
 
-        # Filtraggio dati
         df_ag = master[master['Agente'] == ag_sel]
         if per_sel != "STORICO TOTALE":
             df_ag = df_ag[df_ag['Mese_Anno'] == per_sel]
 
-        # Metric Cards (Box numerici in alto)
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("Leads Ricevuti", len(df_ag))
         k2.metric("Sopralluoghi", int(df_ag['Sopralluogo'].sum()))
         k3.metric("Contratti Firmati", int(df_ag['Cantiere'].sum()))
-        
-        # Calcolo Closing Rate
-        conv = round(df_ag['Cantiere'].sum() / len(df_ag) * 100, 1) if len(df_ag) > 0 else 0
-        k4.metric("Closing Rate", f"{conv}%")
+        k4.metric("Closing Rate", f"{round(df_ag['Cantiere'].sum()/len(df_ag)*100, 1) if len(df_ag)>0 else 0}%")
 
         st.divider()
-
-        # Grafici affiancati
         g1, g2 = st.columns([2, 3])
-        
         with g1:
             st.write("**Conversione (Funnel)**")
-            
-            # --- NUOVA LOGICA COLORI FUNNEL ---
             f_data = pd.DataFrame({
-                'Fase': ['1. Leads', '2. Sopralluoghi', '3. Contratti'],
+                'Fase': ['Leads', 'Sopralluoghi', 'Contratti'],
                 'Valore': [len(df_ag), df_ag['Sopralluogo'].sum(), df_ag['Cantiere'].sum()]
             })
             
-            # Mappatura colori Domei (Nero -> Grigio Scuro -> Grigio Medio)
-            color_map = {
-                '1. Leads': '#000000',      # Nero Puro (Base del logo)
-                '2. Sopralluoghi': '#333333', # Grigio Antracite
-                '3. Contratti': '#666666'    # Grigio Medio
-            }
-            
-            fig_funnel = px.funnel(f_data, x='Valore', y='Fase', color='Fase',
-                                   color_discrete_map=color_map)
-            
-            # Pulizia layout grafico
-            fig_funnel.update_layout(
-                showlegend=False, # Nascondiamo la legenda perché i nomi sono già sull'asse Y
-                margin=dict(l=20, r=20, t=20, b=20),
-                height=350
+            # Funnel con colori Domei forzati per non perdere la forma
+            fig_funnel = px.funnel(f_data, x='Valore', y='Fase')
+            fig_funnel.update_traces(
+                marker=dict(color=['#000000', '#444444', '#FF4B4B']), # Nero, Grigio, Rosso Domei
+                textinfo="value+percent initial"
             )
-            fig_funnel.update_traces(textinfo="value+percent initial") # Mostra numero e % rispetto all'inizio
-            
+            fig_funnel.update_layout(margin=dict(l=20, r=20, t=20, b=20), height=350)
             st.plotly_chart(fig_funnel, use_container_width=True)
-
+            
         with g2:
             st.write("**Provenienza Leads**")
-            # Manteniamo il Rosso Domei per il grafico a barre per stacco visivo
             sorg = df_ag.groupby('Sorgente').size().reset_index(name='Q')
             fig_bar = px.bar(sorg, x='Sorgente', y='Q', color_discrete_sequence=['#FF4B4B'])
             fig_bar.update_layout(margin=dict(l=20, r=20, t=20, b=20), height=350)
@@ -230,10 +206,7 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
         if 'cloud_data' in st.session_state and not st.session_state.cloud_data.empty:
             df_final = pd.merge(df_final, st.session_state.cloud_data[['key', 'Manodopera', 'Materiali', 'Extra']], on='key', how='left', suffixes=('', '_cloud'))
             for c in ['Manodopera', 'Materiali', 'Extra']:
-                if f'{c}_cloud' in df_final.columns:
-                    df_final[c] = df_final[f'{c}_cloud'].fillna(0.0)
-                else:
-                    df_final[c] = 0.0
+                df_final[c] = df_final[f'{c}_cloud'].fillna(0.0) if f'{c}_cloud' in df_final.columns else 0.0
         else:
             for c in ['Manodopera', 'Materiali', 'Extra']: df_final[c] = 0.0
 
