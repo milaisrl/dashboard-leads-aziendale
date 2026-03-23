@@ -120,7 +120,9 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
     master = pd.merge(master, dfs['l'].drop_duplicates('key')[['key', 'Agente', 'Sorgente']], on='key', how='left')
     
     sopr_map = dfs['s'].drop_duplicates('key').set_index('key')['Creato da'].to_dict()
-    master['Agente'] = master.apply(lambda r: r['Agente'] if pd.notna(r['Agente']) and r['Agente']!="" else sopr_map.get(r['key'], "NON ASSEGNATO"), axis=1)
+    master['Agente'] = master.apply(lambda r: r['Agente'] if pd.notna(r['Agente']) and str(r['Agente']).strip() != "" else sopr_map.get(r['key'], "NON ASSEGNATO"), axis=1)
+    # Assicuriamoci che tutti i valori in Agente siano stringhe per l'ordinamento
+    master['Agente'] = master['Agente'].fillna("NON ASSEGNATO").astype(str)
     
     master['Sopralluogo'] = master['key'].isin(dfs['s']['key'].unique())
     master['Cantiere'] = master['key'].isin(dfs['c']['key'].unique())
@@ -133,9 +135,11 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
         st.subheader("🎯 Analisi Performance")
         c1, c2 = st.columns(2)
         with c1:
-            ag_sel = st.selectbox("Agente", sorted(master['Agente'].unique()))
+            # Lista pulita e ordinata di agenti
+            lista_agenti = sorted([str(x) for x in master['Agente'].unique() if x is not None])
+            ag_sel = st.selectbox("Agente", lista_agenti)
         with c2:
-            periodi = ["STORICO TOTALE"] + sorted(master['Mese_Anno'].dropna().unique(), reverse=True)
+            periodi = ["STORICO TOTALE"] + sorted([str(x) for x in master['Mese_Anno'].dropna().unique()], reverse=True)
             per_sel = st.selectbox("Periodo", periodi)
 
         df_ag = master[master['Agente'] == ag_sel]
