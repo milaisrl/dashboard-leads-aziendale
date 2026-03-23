@@ -4,21 +4,31 @@ import plotly.express as px
 import re
 
 st.set_page_config(page_title="Dashboard Leads Aziendale", layout="wide")
-st.title("📊 Analisi Performance Leads (Deep Match)")
+st.title("📊 Analisi Performance Leads & Fatturato")
 
-# --- FUNZIONE DI PULIZIA AVANZATA ---
+# --- FUNZIONI DI NORMALIZZAZIONE AVANZATA ---
 def normalize_name(name):
     if pd.isna(name): return ""
-    # Rimuove tutto ciò che non è una lettera, spazi extra e mette in minuscolo
-    s = re.sub(r'[^a-zA-Z\s]', '', str(name)).lower().strip()
-    # Divide il nome in parole e le ordina alfabeticamente
-    # Esempio: "Rossi Mario" e "Mario Rossi" diventano entrambi "mario rossi"
+    # Rimuove tutto ciò che non è una lettera o numero, mette in minuscolo
+    s = re.sub(r'[^a-zA-Z0-9\s]', '', str(name)).lower().strip()
+    # Ordina le parole alfabeticamente per gestire "Rossi Mario" e "Mario Rossi"
     parts = sorted(s.split())
     return " ".join(parts)
+
+def super_clean_fatturato(name):
+    if pd.isna(name): return ""
+    s = str(name).upper()
+    # 1. Rimuove codici tra parentesi quadre come [CI-704]
+    s = re.sub(r'\[.*\]', '', s)
+    # 2. Rimuove suffissi societari comuni
+    s = re.sub(r'\b(S\.?R\.?L\.?|S\.?N\.?C\.?|S\.?P\.?A\.?|SAS|SS|S\.R\.L\.S\.)\b', '', s)
+    # 3. Normalizzazione standard
+    return normalize_name(s)
 
 def clean_currency(value):
     if pd.isna(value): return 0.0
     if isinstance(value, str):
+        # Toglie i punti delle migliaia e converte la virgola in punto
         value = value.replace('.', '').replace(',', '.')
     try: return float(value)
     except: return 0.0
@@ -32,9 +42,10 @@ with st.sidebar:
     f_offe = st.file_uploader("4. OFFERTE", type=['xlsx', 'csv'])
     f_cant = st.file_uploader("5. ORDINI CANTIERI", type=['xlsx', 'csv'])
     f_fatt = st.file_uploader("6. FATTURATO", type=['xlsx', 'csv'])
-    investimento = st.number_input("Investimento (€)", min_value=0.0, value=1000.0)
+    st.divider()
+    investimento = st.number_input("Investimento Pubblicitario (€)", min_value=0.0, value=1000.0)
 
-# --- ELABORAZIONE ---
+# --- MOTORE DI ELABORAZIONE ---
 if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
     def load(f):
         df = pd.read_csv(f, sep=None, engine='python') if f.name.endswith('.csv') else pd.read_excel(f)
@@ -49,34 +60,33 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
     df_c = load(f_cant)
     df_f = load(f_fatt)
 
-    # CREAZIONE CHIAVI NORMALIZZATE
-    # Usiamo i nomi delle colonne che abbiamo visto nei tuoi file
+    # Creazione Chiavi Univoche Normalizzate
     df_a['key'] = df_a['Cliente'].apply(normalize_name)
     df_l['key'] = df_l['Ragione_sociale'].apply(normalize_name)
     df_s['key'] = df_s['Rag. Soc.'].apply(normalize_name)
     df_o['key'] = df_o['Rag. Soc.'].apply(normalize_name)
     df_c['key'] = df_c['Rag. Soc.'].apply(normalize_name)
     
-    # Pulizia particolare per il Fatturato (rimuove i codici cliente [CI-xxx])
-    df_f['key'] = df_f['Descrizione conto'].apply(lambda x: normalize_name(str(x).split('[')[0]))
+    # Pulizia specifica per il Fatturato
+    df_f['key'] = df_f['Descrizione conto'].apply(super_clean_fatturato)
     col_soldi = 'Imponibile in EUR' if 'Imponibile in EUR' in df_f.columns else 'Totale'
     df_f['Valore_Netto'] = df_f[col_soldi].apply(clean_currency)
 
     # --- COSTRUZIONE TABELLA MASTER ---
-    # Partiamo dai lead dell'analisi (escludendo i contatti tecnici)
+    # Partiamo dai leads (escludendo contatti tecnici)
     master = df_a[df_a['Tipo'] != 'WF Contatto cliente'].copy()
     
-    # 1. Recuperiamo Agente e Sorgente dalla LISTA LEADS
-    # Rimuoviamo i duplicati dalla lista leads per evitare di moltiplicare le righe
+    # 1. Join con Lista Leads (Agente e Sorgente)
     df_l_unique = df_l.drop_duplicates(subset=['key'])
     master = pd.merge(master, df_l_unique[['key', 'Agente', 'Sorgente']], on='key', how='left')
     
-    # 2. Assegnazione Sopralluoghi
+    # 2. Segnamo le conversioni (Sopralluogo e Cantiere)
     sopr_keys = set(df_s['key'].unique())
+    cant_keys = set(df_c['key'].unique())
     master['Sopralluogo'] = master['key'].apply(lambda x: x in sopr_keys)
+    master['Cantiere'] = master['key'].apply(lambda x: x in cant_keys)
 
-    # --- LOGICA DI RECUPERO AGENTE ---
-    # Se il cliente ha fatto un sopralluogo, forziamo l'agente a De Lorenzi se non trovato
+    # 3. Logica Assegnazione Agente (Forzatura su De Lorenzi per i sopralluoghi)
     def assegna_agente(row):
         if pd.notna(row['Agente']) and row['Agente'] != "":
             return row['Agente']
@@ -87,37 +97,58 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
     master['Agente'] = master.apply(assegna_agente, axis=1)
     master['Sorgente'] = master['Sorgente'].fillna('Sconosciuta')
 
-    # 3. Aggancio Fatturato
-    fatt_sum = df_f.groupby('key')['Valore_Netto'].sum().reset_index()
-    master = pd.merge(master, fatt_sum, on='key', how='left').fillna(0)
+    # 4. Aggregazione Fatturato
+    fatt_aggregato = df_f.groupby('key')['Valore_Netto'].sum().reset_index()
+    master = pd.merge(master, fatt_aggregato, on='key', how='left').fillna({'Valore_Netto': 0})
 
-    # --- DASHBOARD ---
-    st.header("📈 Risultati Mensili")
+    # --- GESTIONE VENDITE EXTRA (Clienti non in lista Leads) ---
+    leads_presenti = set(master['key'].unique())
+    df_extra = fatt_aggregato[~fatt_aggregato['key'].isin(leads_presenti)].copy()
+    
+    if not df_extra.empty:
+        extra_rows = pd.DataFrame({
+            'key': df_extra['key'],
+            'Agente': 'VENDITE EXTRA / STORICI',
+            'Sorgente': 'Diretto',
+            'Sopralluogo': False,
+            'Cantiere': True,
+            'Valore_Netto': df_extra['Valore_Netto']
+        })
+        master = pd.concat([master, extra_rows], ignore_index=True)
+
+    # --- DASHBOARD LAYOUT ---
+    total_fatt = df_f['Valore_Netto'].sum()
+    
     k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Leads Totali", len(master))
+    k1.metric("Leads Totali", len(master[master['Agente'] != 'VENDITE EXTRA / STORICI']))
     k2.metric("Sopralluoghi", int(master['Sopralluogo'].sum()))
-    k3.metric("Costo/Lead", f"{round(investimento/len(master), 2)} €")
-    k4.metric("Fatturato", f"{df_f['Valore_Netto'].sum():,.2f} €")
+    k3.metric("CPL Medio", f"{round(investimento/len(df_a), 2)} €")
+    k4.metric("Fatturato Totale", f"{total_fatt:,.2f} €")
 
     st.divider()
-    
+
     # Tabella Performance
     perf = master.groupby('Agente').agg(
         Leads=('key', 'count'),
         Sopralluoghi=('Sopralluogo', 'sum'),
+        Cantieri=('Cantiere', 'sum'),
         Fatturato=('Valore_Netto', 'sum')
     ).reset_index()
     
     perf['% Conv.'] = ((perf['Sopralluoghi'] / perf['Leads']) * 100).round(1)
-    
-    c_graf1, c_graf2 = st.columns(2)
-    with c_graf1:
-        st.plotly_chart(px.bar(perf, x='Agente', y='Leads', title="Leads per Agente"), use_container_width=True)
-    with c_graf2:
-        st.plotly_chart(px.pie(master, names='Sorgente', title="Origine dei Leads"), use_container_width=True)
+    perf = perf.sort_values(by='Fatturato', ascending=False)
 
-    st.subheader("Dettaglio Analisi")
-    st.dataframe(perf.sort_values(by='Leads', ascending=False), use_container_width=True)
+    col_a, col_b = st.columns([2, 1])
+    with col_a:
+        st.subheader("Dettaglio Economico per Agente")
+        st.dataframe(perf.style.format({'Fatturato': '{:,.2f} €'}), use_container_width=True)
+    
+    with col_b:
+        st.subheader("Origine Leads")
+        st.plotly_chart(px.pie(master, names='Sorgente', hole=0.4), use_container_width=True)
+
+    st.subheader("Analisi Conversione")
+    st.plotly_chart(px.bar(perf, x='Agente', y=['Leads', 'Sopralluoghi', 'Cantieri'], barmode='group'), use_container_width=True)
 
 else:
-    st.info("Carica i 6 file per avviare l'analisi.")
+    st.warning("Carica tutti i 6 file richiesti nella barra laterale per generare la dashboard.")
