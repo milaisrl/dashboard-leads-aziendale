@@ -5,3 +5,4 @@ plotly
 fpdf
 gspread
 oauth2client
+matplotlib
