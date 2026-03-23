@@ -7,6 +7,7 @@ import os
 # --- 1. CONFIGURAZIONE PAGINA & BRANDING ---
 st.set_page_config(page_title="Domei Intelligence", layout="wide")
 
+# Stile CSS per testata e componenti
 st.markdown("""
     <style>
     .main { background-color: #ffffff; }
@@ -24,6 +25,13 @@ st.markdown("""
         background-color: #000000;
         color: white;
         border-radius: 5px;
+        width: 100%;
+    }
+    /* Stile per la testata */
+    .header-container {
+        display: flex;
+        align-items: center;
+        margin-bottom: 20px;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -47,7 +55,19 @@ if 'db_budget' not in st.session_state:
 if 'costi_manuali' not in st.session_state:
     st.session_state.costi_manuali = pd.DataFrame(columns=['key', 'Costo_Operatori', 'Costo_Prodotti'])
 
-# --- 4. SIDEBAR ---
+# --- 4. TESTATA ---
+col_logo, col_titolo = st.columns([1, 4])
+with col_logo:
+    if os.path.exists("logo.png"):
+        st.image("logo.png", width=150)
+    else:
+        st.subheader("DOMEI")
+with col_titolo:
+    st.markdown("<h1 style='margin-top: 10px;'>Statistiche commerciali</h1>", unsafe_allow_html=True)
+
+st.divider()
+
+# --- 5. SIDEBAR ---
 with st.sidebar:
     st.header("📁 Caricamento File")
     f_anal = st.file_uploader("1. ANALISI", type=['xlsx', 'csv'])
@@ -84,9 +104,8 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
     
     t_perf, t_mkt, t_bud, t_marg = st.tabs(["📊 Performance", "📢 Marketing", "💰 Budget", "🏗️ Marginalità"])
 
-    # --- TAB PERFORMANCE (AGENTI FILTRATI) ---
+    # --- TAB PERFORMANCE (Solo Agenti Reali) ---
     with t_perf:
-        # Filtriamo "NON ASSEGNATO" dalla scelta dell'agente
         agenti_validi = sorted([a for a in master['Agente'].unique() if a != "NON ASSEGNATO"])
         
         c1, c2 = st.columns(2)
@@ -112,22 +131,22 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
             sorg = df_ag.groupby('Sorgente').size().reset_index(name='Q')
             st.plotly_chart(px.bar(sorg, x='Sorgente', y='Q', color_discrete_sequence=['#FF4B4B']), use_container_width=True)
 
-    # --- TAB MARKETING (INCLUDE TUTTO IL VOLUME) ---
+    # --- TAB MARKETING (Include "Non Assegnato" per volumi totali) ---
     with t_mkt:
-        st.subheader("📢 Analisi Canali (Inclusi Leads Fuori Zona)")
+        st.subheader("📢 Analisi Canali di Acquisizione")
         m_sum = master.groupby('Sorgente').agg({'key':'count', 'Cantiere':'sum'}).reset_index()
         m_sum.columns = ['Sorgente', 'Leads Totali', 'Contratti']
         
         col_m1, col_m2 = st.columns([1,1])
         with col_m1:
             st.plotly_chart(px.pie(m_sum, values='Leads Totali', names='Sorgente', hole=.4, 
-                                   color_discrete_sequence=px.colors.qualitative.Prism), use_container_width=True)
+                                   color_discrete_sequence=px.colors.qualitative.Pastel), use_container_width=True)
         with col_m2:
             st.dataframe(m_sum.sort_values(by='Leads Totali', ascending=False), use_container_width=True)
 
     # --- TAB BUDGET ---
     with t_bud:
-        st.subheader("💰 Budget Marketing per Agente")
+        st.subheader("💰 Gestione Budget Marketing")
         mesi_disp = sorted(master['Mese_Anno'].dropna().unique(), reverse=True)
         mese_sel = st.selectbox("Seleziona Mese/Anno:", mesi_disp)
         
@@ -143,15 +162,15 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
         if st.button("💾 Salva Budget Mensile"):
             temp_db = st.session_state.db_budget[st.session_state.db_budget['Mese'] != mese_sel]
             st.session_state.db_budget = pd.concat([temp_db, edited_df], ignore_index=True)
-            st.success("Dati budget salvati!")
+            st.success("Budget aggiornati correttamente!")
 
-    # --- TAB MARGINALITÀ (CON TOTALE AZIENDALE) ---
+    # --- TAB MARGINALITÀ ---
     with t_marg:
-        st.subheader("🏗️ Analisi Marginalità e Totale Aziendale")
+        st.subheader("🏗️ Analisi Marginalità Cantieri")
         
         df_c = dfs['c'][['key', 'Ragione_Sociale_Pulita', 'Mese_Anno', 'Totale']].copy()
         df_c = df_c.dropna(subset=['Ragione_Sociale_Pulita'])
-        df_c = df_c[df_c['Ragione_Sociale_Pulita'].str.strip() != ""] 
+        df_c = df_c[df_c['Ragione_Sociale_Pulita'].astype(str).str.strip() != ""] 
         df_c['Valore_Contratto'] = df_c['Totale'].apply(clean_currency)
         
         df_m = pd.merge(df_c, master[['key', 'Agente']].drop_duplicates('key'), on='key', how='left')
@@ -166,7 +185,6 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
         df_m['Costo_Mkt'] = df_m.apply(calc_quota, axis=1)
         df_m = pd.merge(df_m, st.session_state.costi_manuali, on='key', how='left').fillna(0)
         
-        # Editor Costi
         df_edited = st.data_editor(df_m[['key', 'Ragione_Sociale_Pulita', 'Agente', 'Valore_Contratto', 'Costo_Mkt', 'Costo_Operatori', 'Costo_Prodotti']], 
             column_config={
                 "key": None,
@@ -186,7 +204,7 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
 
         st.divider()
         
-        # --- RIGA TOTALE AZIENDALE ---
+        # --- RIEPILOGO AZIENDALE ---
         tot_fatt = df_edited['Valore_Contratto'].sum()
         tot_costi = df_edited['Tot_Costi'].sum()
         tot_marg_val = df_edited['Margine_€'].sum()
@@ -204,4 +222,4 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
         }).background_gradient(subset=['Margine_%'], cmap='RdYlGn', vmin=0, vmax=50), use_container_width=True)
 
 else:
-    st.info("👋 Benvenuto. Carica i file per iniziare l'analisi.")
+    st.info("👋 In attesa dei dati. Carica i file nella barra laterale per generare le Statistiche commerciali.")
