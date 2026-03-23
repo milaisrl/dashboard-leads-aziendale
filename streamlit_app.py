@@ -29,11 +29,23 @@ if 'budget_agenti' not in st.session_state:
 if 'costi_extra' not in st.session_state:
     st.session_state.costi_extra = pd.DataFrame(columns=['key', 'Manodopera', 'Materiali', 'Altri_Costi'])
 
-# --- 3. CARICAMENTO FILE ---
-st.title("🚀 Business Intelligence & Marginalità")
+# --- 3. INTESTAZIONE CON LOGO AZIENDALE ---
+# Usiamo colonne per posizionare il logo a sinistra e il titolo a destra
+col_logo, col_titolo = st.columns([1, 6])
 
+with col_logo:
+    try:
+        st.image("logo.png", width=120) 
+    except:
+        st.write("[Logo Aziendale]") # Testo di riserva se il file non esiste
+
+with col_titolo:
+    st.title("Business Intelligence & Marginalità")
+    st.markdown("Piattaforma integrata per l'analisi dei leads e il controllo dei margini operativi.")
+
+# --- 4. CARICAMENTO FILE NELLA SIDEBAR ---
 with st.sidebar:
-    st.header("📁 Caricamento Dati")
+    st.header("📁 Caricamento Database Storico")
     f_anal = st.file_uploader("1. ANALISI", type=['xlsx', 'csv'])
     f_list = st.file_uploader("2. LISTA LEADS", type=['xlsx', 'csv'])
     f_sopr = st.file_uploader("3. SOPRALLUOGHI", type=['xlsx', 'csv'])
@@ -42,7 +54,7 @@ with st.sidebar:
     f_fatt = st.file_uploader("6. FATTURATO", type=['xlsx', 'csv'])
 
 if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
-    # Caricamento e Normalizzazione (Logica simile alla precedente)
+    # Caricamento e Normalizzazione
     def load(f):
         df = pd.read_csv(f, sep=None, engine='python') if f.name.endswith('.csv') else pd.read_excel(f)
         df.columns = df.columns.astype(str).str.strip()
@@ -72,7 +84,7 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
     master['Fatturato'] = master['key'].map(df_f.groupby('key')['Valore_Netto'].sum()).fillna(0)
     master['Agente'] = master['Agente'].fillna("DA ASSEGNARE")
 
-    # --- 4. TABS PRINCIPALI ---
+    # --- 5. TABS PRINCIPALI ---
     tab1, tab2, tab3 = st.tabs(["📊 Dashboard Performance", "💰 Gestione Budget Marketing", "🏗️ Analisi Marginalità"])
 
     # --- TAB 2: GESTIONE BUDGET (Per risolvere il tuo problema dello screenshot) ---
@@ -89,11 +101,11 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
             }
         )
 
-    # --- TAB 1: DASHBOARD (Analisi già esistente) ---
+    # --- TAB 1: DASHBOARD (Analisi Performance) ---
     with tab1:
         st.subheader("Performance Commerciale Generale")
-        # ... (Qui rimane la logica dei KPI e grafici che avevamo costruito)
-        st.write("Seleziona i filtri per vedere le performance degli agenti.")
+        # (La logica dei KPI e grafici va qui, come nelle versioni precedenti)
+        st.write("Dati caricati. Seleziona i filtri per vedere le performance.")
 
     # --- TAB 3: ANALISI MARGINALITÀ (Nuova Sezione Richiesta) ---
     with tab3:
@@ -106,16 +118,12 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
             on='key', how='left'
         )
 
-        # Calcolo Costo Pubblicitario per Contratto
-        # 1. Quanti contratti ha fatto ogni agente ogni mese?
+        # Calcolo Costo Pubblicitario per Contratto (Logica di Ripartizione)
         count_contratti = df_margini.groupby(['Agente', 'Mese_Anno']).size().reset_index(name='Num_Contratti')
-        
-        # 2. Uniamo col budget
         budget_map = st.session_state.budget_agenti.copy()
         budget_map = pd.merge(budget_map, count_contratti, on=['Agente', 'Mese'], how='left')
         budget_map['Costo_Pubb_Unitario'] = budget_map['Budget'] / budget_map['Num_Contratti']
         
-        # 3. Portiamo il costo nel df_margini
         df_margini = pd.merge(
             df_margini, 
             budget_map[['Agente', 'Mese', 'Costo_Pubb_Unitario']], 
@@ -127,12 +135,14 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
             if col not in df_margini: df_margini[col] = 0.0
 
         st.write("Compila i costi per ogni contratto nella tabella qui sotto:")
+        
+        # Editor Tabellare
         df_editor = st.data_editor(
             df_margini[['Rag. Soc.', 'Agente', 'Valore_Contratto', 'Costo_Pubb_Unitario', 'Manodopera', 'Materiali', 'Altri_Costi']],
             use_container_width=True
         )
 
-        # Calcoli finali
+        # Calcoli di Marginalità Finali
         df_editor['Totale_Costi'] = df_editor['Costo_Pubb_Unitario'].fillna(0) + df_editor['Manodopera'] + df_editor['Materiali'] + df_editor['Altri_Costi']
         df_editor['Margine_Assoluto'] = df_editor['Valore_Contratto'] - df_editor['Totale_Costi']
         df_editor['Margine_Perc'] = (df_editor['Margine_Assoluto'] / df_editor['Valore_Contratto'] * 100).round(1)
@@ -140,7 +150,7 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
         st.divider()
         st.subheader("Risultato Marginalità")
         
-        # Formattazione per visualizzazione
+        # Formattazione e Background Gradient per la percentuale
         st.dataframe(
             df_editor.style.format({
                 'Valore_Contratto': '{:,.2f} €',
@@ -151,9 +161,9 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
             use_container_width=True
         )
 
-        # Grafico Margini
+        # Grafico dei Margini per singolo contratto
         fig_marg = px.bar(df_editor, x='Rag. Soc.', y='Margine_Assoluto', color='Margine_Perc', title="Margine per Singolo Contratto (€)")
         st.plotly_chart(fig_marg, use_container_width=True)
 
 else:
-    st.info("Carica i file nella sidebar per attivare l'analisi dei margini.")
+    st.info("👋 Carica i file storici nella sidebar per attivare l'analisi completa.")
