@@ -2,31 +2,57 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import re
+from fpdf import FPDF # Ricorda di aggiungerlo a requirements.txt
+import io
 
 st.set_page_config(page_title="CRM & Marketing Analytics", layout="wide")
 
-# --- 1. GESTIONE BUDGET STORICO ---
-# In un'app reale questi dati andrebbero su un database. 
-# Per ora, li gestiamo con una tabella modificabile nella sidebar.
+# --- 1. GESTIONE BUDGET PUBBLICITARIO PER AGENTE ---
 with st.sidebar:
-    st.header("💰 Archivio Spese Pubblicitarie")
-    st.info("Inserisci il budget speso per ogni mese per calcolare il CPL storico.")
+    st.header("💰 Budget Pubblicitario")
+    st.info("Assegna il valore pubblicitario mensile per ciascun agente.")
     
-    # Creiamo una tabella predefinita per i mesi
-    if 'budget_data' not in st.session_state:
-        st.session_state.budget_data = pd.DataFrame([
-            {"Mese": "2025-10", "Budget": 1000.0},
-            {"Mese": "2025-11", "Budget": 1000.0},
-            {"Mese": "2025-12", "Budget": 1000.0},
-            {"Mese": "2026-01", "Budget": 1000.0},
-            {"Mese": "2026-02", "Budget": 1000.0},
-            {"Mese": "2026-03", "Budget": 1000.0},
+    # Inizializzazione tabella budget se non esiste
+    if 'budget_agenti' not in st.session_state:
+        st.session_state.budget_agenti = pd.DataFrame([
+            {"Agente": "AGENTE A", "Mese": "2026-03", "Budget": 500.0},
+            {"Agente": "AGENTE B", "Mese": "2026-03", "Budget": 300.0},
         ])
     
-    edited_budget = st.data_editor(st.session_state.budget_data, num_rows="dynamic")
-    st.session_state.budget_data = edited_budget
+    # Editor dinamico per assegnare budget agli agenti
+    edited_budget = st.data_editor(st.session_state.budget_agenti, num_rows="dynamic")
+    st.session_state.budget_agenti = edited_budget
 
-# --- 2. FUNZIONI DI PULIZIA ---
+# --- 2. FUNZIONE GENERAZIONE PDF ---
+def genera_pdf(nome_agente, dati_agente, periodo):
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Arial", "B", 16)
+    pdf.cell(190, 10, f"Report Performance: {nome_agente}", ln=True, align='C')
+    pdf.set_font("Arial", "", 12)
+    pdf.cell(190, 10, f"Periodo: {periodo}", ln=True, align='C')
+    pdf.ln(10)
+    
+    # Tabella Dati
+    pdf.set_fill_color(200, 220, 255)
+    pdf.cell(95, 10, "Metrica", 1, 0, 'C', True)
+    pdf.cell(95, 10, "Valore", 1, 1, 'C', True)
+    
+    metriche = [
+        ("Leads Assegnati", str(dati_agente['Leads'])),
+        ("Sopralluoghi", str(dati_agente['Sopralluoghi'])),
+        ("Conversione Lead/Sopr.", f"{dati_agente['Conv_Perc']}%"),
+        ("Contratti (Fatturato > 0)", str(dati_agente['Contratti'])),
+        ("Fatturato Totale", f"{dati_agente['Fatturato']:,.2f} EUR")
+    ]
+    
+    for m, v in metriche:
+        pdf.cell(95, 10, m, 1)
+        pdf.cell(95, 10, v, 1, 1)
+        
+    return pdf.output(dest='S').encode('latin-1')
+
+# --- 3. FUNZIONI DI PULIZIA (Invariate) ---
 def normalize_name(name):
     if pd.isna(name): return ""
     s = re.sub(r'[^a-zA-Z0-9\s]', '', str(name)).lower().strip()
@@ -39,10 +65,10 @@ def clean_currency(value):
     try: return float(value)
     except: return 0.0
 
-# --- 3. CARICAMENTO E UNIFICAZIONE ---
-st.title("📊 Dashboard Analitica Globale vs Mensile")
+# --- 4. CARICAMENTO E UNIFICAZIONE ---
+st.title("📊 CRM Analytics & Performance Agenti")
 
-with st.expander("📁 Carica i File Storici (Analisi, Leads, Sopralluoghi, Offerte, Cantieri, Fatturato)"):
+with st.expander("📁 Carica i File Storici"):
     f_anal = st.file_uploader("1. ANALISI", type=['xlsx', 'csv'])
     f_list = st.file_uploader("2. LISTA LEADS", type=['xlsx', 'csv'])
     f_sopr = st.file_uploader("3. SOPRALLUOGHI", type=['xlsx', 'csv'])
@@ -54,77 +80,67 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
     def load(f):
         df = pd.read_csv(f, sep=None, engine='python') if f.name.endswith('.csv') else pd.read_excel(f)
         df.columns = df.columns.astype(str).str.strip()
-        # Cerchiamo una colonna data per il raggruppamento temporale
         date_col = [c for c in df.columns if 'Data' in c or 'inizio' in c.lower()]
         if date_col:
             df['Data_Ref'] = pd.to_datetime(df[date_col[0]], errors='coerce')
             df['Mese_Anno'] = df['Data_Ref'].dt.strftime('%Y-%m')
         return df.dropna(how='all')
 
-    # Caricamento
-    df_a = load(f_anal)
-    df_l = load(f_list)
-    df_s = load(f_sopr)
-    df_o = load(f_offe)
-    df_c = load(f_cant)
-    df_f = load(f_fatt)
+    df_a, df_l, df_s, df_o, df_c, df_f = load(f_anal), load(f_list), load(f_sopr), load(f_offe), load(f_cant), load(f_fatt)
 
-    # Chiavi e Pulizia
+    # Elaborazione dati
     df_a['key'] = df_a['Cliente'].apply(normalize_name)
     df_l['key'] = df_l['Ragione_sociale'].apply(normalize_name)
     df_s['key'] = df_s['Rag. Soc.'].apply(normalize_name)
-    
-    # Fatturato con pulizia specifica
     df_f['key'] = df_f['Descrizione conto'].apply(lambda x: normalize_name(str(x).split('[')[0]))
     col_soldi = 'Imponibile in EUR' if 'Imponibile in EUR' in df_f.columns else 'Totale'
     df_f['Valore_Netto'] = df_f[col_soldi].apply(clean_currency)
 
-    # Merge Master
     master = df_a[df_a['Tipo'] != 'WF Contatto cliente'].copy()
     master = pd.merge(master, df_l.drop_duplicates('key')[['key', 'Agente', 'Sorgente']], on='key', how='left')
-    
-    # Marcatori
     master['Sopralluogo'] = master['key'].isin(df_s['key'].unique())
     master['Fatturato'] = master['key'].map(df_f.groupby('key')['Valore_Netto'].sum()).fillna(0)
-    master['Agente'] = master['Agente'].fillna("NEW DDL DI DE LORENZI DANIELE" if master['Sopralluogo'].any() else "DA ASSEGNARE")
+    master['Agente'] = master['Agente'].fillna("DA ASSEGNARE")
 
-    # --- 4. SELETTORE PERIODO ---
-    periodi = sorted(master['Mese_Anno'].dropna().unique(), reverse=True)
-    scelta = st.selectbox("Seleziona Periodo di Analisi", ["TUTTO LO STORICO"] + periodi)
-
-    if scelta == "TUTTO LO STORICO":
-        df_view = master
-        budget_tot = st.session_state.budget_data['Budget'].sum()
-    else:
-        df_view = master[master['Mese_Anno'] == scelta]
-        budget_tot = st.session_state.budget_data[st.session_state.budget_data['Mese'] == scelta]['Budget'].sum()
-
-    # --- 5. VISUALIZZAZIONE KPI ---
+    # --- 5. DASHBOARD AGENTE ---
     st.divider()
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Leads nel Periodo", len(df_view))
-    m2.metric("Sopralluoghi", int(df_view['Sopralluogo'].sum()))
+    st.subheader("👤 Analisi Singolo Agente")
     
-    cpl = round(budget_tot / len(df_view), 2) if len(df_view) > 0 else 0
-    m3.metric("CPL (Costo per Lead)", f"{cpl} €")
-    
-    fatt_periodo = df_view['Fatturato'].sum() if scelta != "TUTTO LO STORICO" else df_f['Valore_Netto'].sum()
-    m4.metric("Fatturato Periodo", f"{fatt_periodo:,.2f} €")
+    c1, c2 = st.columns(2)
+    with c1:
+        agente_scelto = st.selectbox("Seleziona Agente", master['Agente'].unique())
+    with c2:
+        periodi = sorted(master['Mese_Anno'].dropna().unique(), reverse=True)
+        periodo_scelto = st.selectbox("Seleziona Periodo", ["TUTTO LO STORICO"] + periodi)
 
-    # --- 6. GRAFICI ---
-    c_left, c_right = st.columns(2)
-    with c_left:
-        st.subheader("Performance Agenti")
-        perf_agente = df_view.groupby('Agente').agg({'key': 'count', 'Sopralluogo': 'sum', 'Fatturato': 'sum'}).reset_index()
-        st.plotly_chart(px.bar(perf_agente, x='Agente', y='key', title="Volume Leads"), use_container_width=True)
-    
-    with c_right:
-        st.subheader("Trend Mensile (Leads vs Budget)")
-        trend = master.groupby('Mese_Anno').size().reset_index(name='Leads')
-        st.plotly_chart(px.line(trend, x='Mese_Anno', y='Leads', title="Andamento Temporale"), use_container_width=True)
+    # Filtraggio dati agente
+    df_agente = master[master['Agente'] == agente_scelto]
+    if periodo_scelto != "TUTTO LO STORICO":
+        df_agente = df_agente[df_agente['Mese_Anno'] == periodo_scelto]
 
-    st.subheader("Dettaglio Analisi Economica")
-    st.dataframe(perf_agente.style.format({'Fatturato': '{:,.2f} €'}), use_container_width=True)
+    # Calcolo metriche per report
+    leads_tot = len(df_agente)
+    sopr_tot = int(df_agente['Sopralluogo'].sum())
+    conv_perc = round((sopr_tot / leads_tot * 100), 2) if leads_tot > 0 else 0
+    contratti = len(df_agente[df_agente['Fatturato'] > 0])
+    fatt_agente = df_agente['Fatturato'].sum()
+
+    # Visualizzazione KPI Agente
+    ka1, ka2, ka3, ka4 = st.columns(4)
+    ka1.metric("Leads Assegnati", leads_tot)
+    ka2.metric("Sopralluoghi", sopr_tot, f"{conv_perc}% conv.")
+    ka3.metric("Contratti", contratti)
+    ka4.metric("Fatturato", f"{fatt_agente:,.2f} €")
+
+    # Bottone PDF
+    dati_per_pdf = {
+        'Leads': leads_tot, 'Sopralluoghi': sopr_tot, 
+        'Conv_Perc': conv_perc, 'Contratti': contratti, 'Fatturato': fatt_agente
+    }
+    
+    pdf_file = genera_pdf(agente_scelto, dati_per_pdf, periodo_scelto)
+    st.download_button(label="📄 Scarica Report PDF Agente", data=pdf_file, 
+                       file_name=f"Report_{agente_scelto}_{periodo_scelto}.pdf", mime="application/pdf")
 
 else:
-    st.info("👋 Carica i file storici per generare l'analisi globale e mensile.")
+    st.info("👋 Carica i file storici per sbloccare l'analisi per agente.")
