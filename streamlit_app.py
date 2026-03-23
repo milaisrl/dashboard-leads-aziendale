@@ -2,28 +2,13 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 import re
-from fpdf import FPDF # Ricorda di aggiungerlo a requirements.txt
+from fpdf import FPDF
 import io
 
-st.set_page_config(page_title="CRM & Marketing Analytics", layout="wide")
+# Configurazione Pagina
+st.set_page_config(page_title="CRM & Marketing Analytics PRO", layout="wide")
 
-# --- 1. GESTIONE BUDGET PUBBLICITARIO PER AGENTE ---
-with st.sidebar:
-    st.header("💰 Budget Pubblicitario")
-    st.info("Assegna il valore pubblicitario mensile per ciascun agente.")
-    
-    # Inizializzazione tabella budget se non esiste
-    if 'budget_agenti' not in st.session_state:
-        st.session_state.budget_agenti = pd.DataFrame([
-            {"Agente": "AGENTE A", "Mese": "2026-03", "Budget": 500.0},
-            {"Agente": "AGENTE B", "Mese": "2026-03", "Budget": 300.0},
-        ])
-    
-    # Editor dinamico per assegnare budget agli agenti
-    edited_budget = st.data_editor(st.session_state.budget_agenti, num_rows="dynamic")
-    st.session_state.budget_agenti = edited_budget
-
-# --- 2. FUNZIONE GENERAZIONE PDF ---
+# --- 1. FUNZIONE GENERAZIONE PDF ---
 def genera_pdf(nome_agente, dati_agente, periodo):
     pdf = FPDF()
     pdf.add_page()
@@ -33,7 +18,7 @@ def genera_pdf(nome_agente, dati_agente, periodo):
     pdf.cell(190, 10, f"Periodo: {periodo}", ln=True, align='C')
     pdf.ln(10)
     
-    # Tabella Dati
+    # Tabella Performance
     pdf.set_fill_color(200, 220, 255)
     pdf.cell(95, 10, "Metrica", 1, 0, 'C', True)
     pdf.cell(95, 10, "Valore", 1, 1, 'C', True)
@@ -42,8 +27,9 @@ def genera_pdf(nome_agente, dati_agente, periodo):
         ("Leads Assegnati", str(dati_agente['Leads'])),
         ("Sopralluoghi", str(dati_agente['Sopralluoghi'])),
         ("Conversione Lead/Sopr.", f"{dati_agente['Conv_Perc']}%"),
-        ("Contratti (Fatturato > 0)", str(dati_agente['Contratti'])),
-        ("Fatturato Totale", f"{dati_agente['Fatturato']:,.2f} EUR")
+        ("Fatturato Totale", f"{dati_agente['Fatturato']:,.2f} EUR"),
+        ("Budget Pubblicitario", f"{dati_agente['Budget']:,.2f} EUR"),
+        ("ROI (Ritorno)", f"{dati_agente['ROI']}x")
     ]
     
     for m, v in metriche:
@@ -52,7 +38,21 @@ def genera_pdf(nome_agente, dati_agente, periodo):
         
     return pdf.output(dest='S').encode('latin-1')
 
-# --- 3. FUNZIONI DI PULIZIA (Invariate) ---
+# --- 2. GESTIONE BUDGET PUBBLICITARIO NELLA SIDEBAR ---
+with st.sidebar:
+    st.header("💰 Gestione Budget Agenti")
+    st.info("Assegna il valore pubblicitario per agente e mese.")
+    
+    if 'budget_agenti' not in st.session_state:
+        # Esempio di struttura, aggiungi qui i tuoi agenti reali
+        st.session_state.budget_agenti = pd.DataFrame([
+            {"Agente": "AGENTE TEST", "Mese": "2026-03", "Budget": 500.0}
+        ])
+    
+    edited_budget = st.data_editor(st.session_state.budget_agenti, num_rows="dynamic")
+    st.session_state.budget_agenti = edited_budget
+
+# --- 3. FUNZIONI DI PULIZIA DATI ---
 def normalize_name(name):
     if pd.isna(name): return ""
     s = re.sub(r'[^a-zA-Z0-9\s]', '', str(name)).lower().strip()
@@ -66,9 +66,9 @@ def clean_currency(value):
     except: return 0.0
 
 # --- 4. CARICAMENTO E UNIFICAZIONE ---
-st.title("📊 CRM Analytics & Performance Agenti")
+st.title("📊 Dashboard Analitica & Performance")
 
-with st.expander("📁 Carica i File Storici"):
+with st.expander("📁 Carica i File Storici (Analisi, Leads, Sopralluoghi, Offerte, Cantieri, Fatturato)"):
     f_anal = st.file_uploader("1. ANALISI", type=['xlsx', 'csv'])
     f_list = st.file_uploader("2. LISTA LEADS", type=['xlsx', 'csv'])
     f_sopr = st.file_uploader("3. SOPRALLUOGHI", type=['xlsx', 'csv'])
@@ -88,11 +88,12 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
 
     df_a, df_l, df_s, df_o, df_c, df_f = load(f_anal), load(f_list), load(f_sopr), load(f_offe), load(f_cant), load(f_fatt)
 
-    # Elaborazione dati
+    # Chiavi e Merge
     df_a['key'] = df_a['Cliente'].apply(normalize_name)
     df_l['key'] = df_l['Ragione_sociale'].apply(normalize_name)
     df_s['key'] = df_s['Rag. Soc.'].apply(normalize_name)
     df_f['key'] = df_f['Descrizione conto'].apply(lambda x: normalize_name(str(x).split('[')[0]))
+    
     col_soldi = 'Imponibile in EUR' if 'Imponibile in EUR' in df_f.columns else 'Totale'
     df_f['Valore_Netto'] = df_f[col_soldi].apply(clean_currency)
 
@@ -102,45 +103,71 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
     master['Fatturato'] = master['key'].map(df_f.groupby('key')['Valore_Netto'].sum()).fillna(0)
     master['Agente'] = master['Agente'].fillna("DA ASSEGNARE")
 
-    # --- 5. DASHBOARD AGENTE ---
+    # --- 5. DASHBOARD AGENTE & REPORTING ---
     st.divider()
-    st.subheader("👤 Analisi Singolo Agente")
+    st.header("👤 Performance per Agente")
     
-    c1, c2 = st.columns(2)
-    with c1:
+    periodi = sorted(master['Mese_Anno'].dropna().unique(), reverse=True)
+    
+    c_sel1, c_sel2 = st.columns(2)
+    with c_sel1:
         agente_scelto = st.selectbox("Seleziona Agente", master['Agente'].unique())
-    with c2:
-        periodi = sorted(master['Mese_Anno'].dropna().unique(), reverse=True)
-        periodo_scelto = st.selectbox("Seleziona Periodo", ["TUTTO LO STORICO"] + periodi)
+    with c_sel2:
+        periodo_agente = st.selectbox("Seleziona Periodo", ["TUTTO LO STORICO"] + periodi)
 
-    # Filtraggio dati agente
+    # Filtraggio Dati
     df_agente = master[master['Agente'] == agente_scelto]
-    if periodo_scelto != "TUTTO LO STORICO":
-        df_agente = df_agente[df_agente['Mese_Anno'] == periodo_scelto]
+    if periodo_agente != "TUTTO LO STORICO":
+        df_agente = df_agente[df_agente['Mese_Anno'] == periodo_agente]
 
-    # Calcolo metriche per report
+    # Metriche Base
     leads_tot = len(df_agente)
     sopr_tot = int(df_agente['Sopralluogo'].sum())
     conv_perc = round((sopr_tot / leads_tot * 100), 2) if leads_tot > 0 else 0
-    contratti = len(df_agente[df_agente['Fatturato'] > 0])
     fatt_agente = df_agente['Fatturato'].sum()
 
-    # Visualizzazione KPI Agente
-    ka1, ka2, ka3, ka4 = st.columns(4)
-    ka1.metric("Leads Assegnati", leads_tot)
-    ka2.metric("Sopralluoghi", sopr_tot, f"{conv_perc}% conv.")
-    ka3.metric("Contratti", contratti)
-    ka4.metric("Fatturato", f"{fatt_agente:,.2f} €")
+    # Recupero Budget e ROI
+    if periodo_agente == "TUTTO LO STORICO":
+        budget_agente = st.session_state.budget_agenti[st.session_state.budget_agenti['Agente'] == agente_scelto]['Budget'].sum()
+    else:
+        budget_agente = st.session_state.budget_agenti[
+            (st.session_state.budget_agenti['Agente'] == agente_scelto) & 
+            (st.session_state.budget_agenti['Mese'] == periodo_agente)
+        ]['Budget'].sum()
 
-    # Bottone PDF
-    dati_per_pdf = {
-        'Leads': leads_tot, 'Sopralluoghi': sopr_tot, 
-        'Conv_Perc': conv_perc, 'Contratti': contratti, 'Fatturato': fatt_agente
+    roi_agente = round(fatt_agente / budget_agente, 2) if budget_agente > 0 else 0
+
+    # Visualizzazione KPI
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Leads Ricevuti", leads_tot)
+    k2.metric("Sopralluoghi", sopr_tot, f"{conv_perc}%")
+    k3.metric("Fatturato Prodotto", f"{fatt_agente:,.2f} €")
+    k4.metric("ROI Pubblicitario", f"{roi_agente}x")
+
+    # Grafico Funnel Agente
+    fig_funnel = px.funnel(
+        pd.DataFrame({'Fase': ['Leads', 'Sopralluoghi'], 'Quantità': [leads_tot, sopr_tot]}),
+        x='Quantità', y='Fase', title=f"Conversione {agente_scelto}"
+    )
+    st.plotly_chart(fig_funnel, use_container_width=True)
+
+    # --- 6. ESPORTAZIONE PDF ---
+    dati_report = {
+        'Leads': leads_tot, 'Sopralluoghi': sopr_tot, 'Conv_Perc': conv_perc,
+        'Fatturato': fatt_agente, 'Budget': budget_agente, 'ROI': roi_agente
     }
     
-    pdf_file = genera_pdf(agente_scelto, dati_per_pdf, periodo_scelto)
-    st.download_button(label="📄 Scarica Report PDF Agente", data=pdf_file, 
-                       file_name=f"Report_{agente_scelto}_{periodo_scelto}.pdf", mime="application/pdf")
+    btn_pdf = genera_pdf(agente_scelto, dati_report, periodo_agente)
+    st.download_button(
+        label="📥 Scarica Statistica Agente (PDF)",
+        data=btn_pdf,
+        file_name=f"Report_{agente_scelto}_{periodo_agente}.pdf",
+        mime="application/pdf"
+    )
+
+    # --- 7. DETTAGLIO TABELLARE ---
+    st.subheader("📋 Dettaglio Leads Assegnati")
+    st.dataframe(df_agente[['Data_Ref', 'key', 'Sorgente', 'Sopralluogo', 'Fatturato']], use_container_width=True)
 
 else:
-    st.info("👋 Carica i file storici per sbloccare l'analisi per agente.")
+    st.info("👋 In attesa dei file storici. Caricali per attivare i report.")
