@@ -2,121 +2,104 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# --- SISTEMA DI PASSWORD ---
-def check_password():
-    if "password" not in st.secrets:
-        st.error("Configura la password nei Secrets di Streamlit!")
-        return False
-    
-    if "authenticated" not in st.session_state:
-        st.session_state["authenticated"] = False
-
-    if not st.session_state["authenticated"]:
-        pwd = st.text_input("Inserisci la password aziendale", type="password")
-        if pwd == st.secrets["password"]:
-            st.session_state["authenticated"] = True
-            st.rerun()
-        elif pwd:
-            st.error("Password errata")
-        return False
-    return True
-
-if not check_password():
-    st.stop()
-# --- FINE SISTEMA DI PASSWORD ---
-
-# Da qui in poi il tuo codice continua normalmente...
-st.set_page_config(page_title="Dashboard Leads Aziendale", layout="wide")
-# ...eccetera
+# --- CONFIGURAZIONE PAGINA ---
 st.set_page_config(page_title="Dashboard Leads Aziendale", layout="wide")
 
-st.title("📊 Analisi Leads & Performance Agenti")
-st.markdown("Carica i file mensili per generare le statistiche.")
+st.title("📊 Analisi Leads & Performance")
+st.markdown("Carica i file mensili estratti dal gestionale/CRM.")
 
-# --- SIDEBAR PER CARICAMENTO E INPUT ---
+# --- FUNZIONE PULIZIA NOMI ---
+def clean_name(name):
+    return str(name).strip().lower()
+
+# --- SIDEBAR CARICAMENTO ---
 with st.sidebar:
-    st.header("Caricamento Dati")
-    file_analisi = st.file_uploader("1. ANALISI (Excel/CSV)", type=['xlsx', 'csv'])
-    file_lista = st.file_uploader("2. LISTA LEADS (Excel/CSV)", type=['xlsx', 'csv'])
-    file_sopralluoghi = st.file_uploader("3. SOPRALLUOGHI (Excel/CSV)", type=['xlsx', 'csv'])
-    file_offerte = st.file_uploader("4. OFFERTE (Excel/CSV)", type=['xlsx', 'csv'])
-    file_cantieri = st.file_uploader("5. CANTIERI/FATTURATO (Excel/CSV)", type=['xlsx', 'csv'])
+    st.header("Caricamento File")
+    f_analisi = st.file_uploader("1. ANALISI (Leads ricevuti)", type=['xlsx', 'csv'])
+    f_lista = st.file_uploader("2. LISTA LEADS (Agente/Sorgente)", type=['xlsx', 'csv'])
+    f_sopralluoghi = st.file_uploader("3. SOPRALLUOGHI", type=['xlsx', 'csv'])
+    f_offerte = st.file_uploader("4. OFFERTE (Preventivi)", type=['xlsx', 'csv'])
+    f_cantieri = st.file_uploader("5. ORDINI CANTIERI", type=['xlsx', 'csv'])
+    f_fatturato = st.file_uploader("6. FATTURATO REALE", type=['xlsx', 'csv'])
     
     st.divider()
     investimento = st.number_input("Investimento Pubblicitario (€)", min_value=0.0, value=1000.0)
 
-# Funzione per pulire i nomi e renderli confrontabili
-def clean_name(name):
-    return str(name).strip().lower()
-
-# --- ELABORAZIONE DATI ---
-if all([file_analisi, file_lista, file_sopralluoghi, file_offerte, file_cantieri]):
-    # Caricamento (gestisce sia CSV che Excel)
-    def load_df(file):
-        if file.name.endswith('.csv'): return pd.read_csv(file)
+# --- LOGICA DI ELABORAZIONE ---
+if all([f_analisi, f_lista, f_sopralluoghi, f_offerte, f_cantieri, f_fatturato]):
+    
+    def load(file):
+        if file.name.endswith('.csv'): return pd.read_csv(file, sep=None, engine='python')
         return pd.read_excel(file)
 
-    df_a = load_df(file_analisi)
-    df_l = load_df(file_lista)
-    df_s = load_df(file_sopralluoghi)
-    df_o = load_df(file_offerte)
-    df_c = load_df(file_cantieri)
+    # Caricamento e pulizia immediata nomi colonne
+    dfs = {
+        'anal': load(f_analisi), 'list': load(f_lista), 
+        'sopr': load(f_sopralluoghi), 'offe': load(f_offerte), 
+        'cant': load(f_cantieri), 'fatt': load(f_fatturato)
+    }
+    for k in dfs: dfs[k].columns = dfs[k].columns.astype(str).str.strip()
 
-    # 1. Pulizia Analisi (Rimuovo WF Contatto)
-    df_a = df_a[df_a['Tipo'] != 'WF Contatto cliente']
-    
-    # 2. Creazione Chiavi Univoche
-    for df in [df_a, df_l, df_s, df_o, df_c]:
-        if 'Cliente' in df.columns:
-            df['key'] = df['Cliente'].apply(clean_name)
+    # Creazione chiavi di aggancio (sperando ci sia 'Cliente' in tutti)
+    for k in dfs:
+        col_name = 'Cliente' if 'Cliente' in dfs[k].columns else dfs[k].columns[0]
+        dfs[k]['key'] = dfs[k][col_name].apply(clean_name)
 
-    # 3. Merge dei dati
-    # Unisco Analisi con Lista Leads per avere Agente e Sorgente
-    df_master = pd.merge(df_a, df_l[['key', 'Agente', 'Sorgente']], on='key', how='left')
-    
-    # Identificazione Fuori Zona (Agente vuoto)
-    df_master['Agente'] = df_master['Agente'].fillna('FUORI ZONA')
-    
-    # --- CALCOLO KPI ---
-    tot_leads = len(df_master)
-    leads_validi = len(df_master[df_master['Agente'] != 'FUORI ZONA'])
-    cpl = investimento / tot_leads if tot_leads > 0 else 0
-    
-    # Calcolo Sopralluoghi e Conversioni
-    sopralluoghi_nomi = df_s['key'].unique()
-    df_master['Sopralluogo'] = df_master['key'].isin(sopralluoghi_nomi)
-    
-    # Fatturato
-    tot_fatturato = df_c['Importo'].sum() if 'Importo' in df_c.columns else 0
+    # 1. Filtro Analisi
+    df_a = dfs['anal']
+    tipo_col = 'Tipo' if 'Tipo' in df_a.columns else df_a.columns[0]
+    df_a = df_a[df_a[tipo_col] != 'WF Contatto cliente']
 
-    # --- VISUALIZZAZIONE ---
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Totale Leads", tot_leads)
-    col2.metric("Leads Fuori Zona", len(df_master[df_master['Agente'] == 'FUORI ZONA']))
-    col3.metric("Costo per Lead (CPL)", f"{cpl:.2f} €")
-    col4.metric("Fatturato Totale", f"{tot_fatturato:,.2f} €")
+    # 2. Arricchimento Leads (Join con Lista Leads)
+    df_l = dfs['list']
+    cols_l = ['key']
+    if 'Agente' in df_l.columns: cols_l.append('Agente')
+    if 'Sorgente' in df_l.columns: cols_l.append('Sorgente')
+    
+    master = pd.merge(df_a, df_l[cols_l], on='key', how='left')
+    master['Agente'] = master['Agente'].fillna('FUORI ZONA')
 
+    # 3. Aggancio conversioni
+    master['Sopralluogo'] = master['key'].isin(dfs['sopr']['key'].unique())
+    master['Contratto'] = master['key'].isin(dfs['cant']['key'].unique())
+
+    # 4. Calcolo Fatturato per Agente (dal file Fatturato)
+    # Assumiamo che nel file fatturato ci sia una colonna 'Importo'
+    col_soldi = 'Importo' if 'Importo' in dfs['fatt'].columns else dfs['fatt'].select_dtypes(include='number').columns[0]
+    fatt_per_cliente = dfs['fatt'].groupby('key')[col_soldi].sum().reset_index()
+    master = pd.merge(master, fatt_per_cliente, on='key', how='left').fillna(0)
+
+    # --- DISPLAY KPI ---
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Leads Totali", len(master))
+    c2.metric("Sopralluoghi", master['Sopralluogo'].sum())
+    c3.metric("CPL (Costo Lead)", f"{(investimento/len(master)):.2f} €")
+    c4.metric("Fatturato Tot.", f"{dfs['fatt'][col_soldi].sum():,.2f} €")
+
+    # --- GRAFICI ---
     st.divider()
-
-    # Grafici
-    c1, c2 = st.columns(2)
+    g1, g2 = st.columns(2)
     
-    with c1:
+    with g1:
         st.subheader("Leads per Sorgente")
-        fig_sor = px.pie(df_master, names='Sorgente', hole=0.4)
-        st.plotly_chart(fig_sor, use_container_width=True)
-
-    with c2:
-        st.subheader("Performance Agenti (Leads vs Sopralluoghi)")
-        agenti_stats = df_master.groupby('Agente').agg(
+        fig1 = px.pie(master, names='Sorgente')
+        st.plotly_chart(fig1, use_container_width=True)
+        
+    with g2:
+        st.subheader("Conversione per Agente")
+        # Raggruppiamo i dati per agente
+        agente_df = master.groupby('Agente').agg(
             Leads=('key', 'count'),
-            Sopralluoghi=('Sopralluogo', 'sum')
+            Sopralluoghi=('Sopralluogo', 'sum'),
+            Fatturato=(col_soldi, 'sum')
         ).reset_index()
-        fig_bar = px.bar(agenti_stats, x='Agente', y=['Leads', 'Sopralluoghi'], barmode='group')
-        st.plotly_chart(fig_bar, use_container_width=True)
+        fig2 = px.bar(agente_df, x='Agente', y=['Leads', 'Sopralluoghi'], barmode='group')
+        st.plotly_chart(fig2, use_container_width=True)
 
-    st.subheader("Tabella Riassuntiva Mensile")
-    st.dataframe(agenti_stats, use_container_width=True)
+    st.subheader("Dettaglio Performance")
+    # Calcolo Rapporto Lead/Sopralluogo
+    agente_df['% Conv.'] = (agente_df['Sopralluoghi'] / agente_df['Leads'] * 100).round(1)
+    st.dataframe(agente_df, use_container_width=True)
 
 else:
-    st.info("👋 Benvenuto! Carica tutti i 5 file nella barra laterale per vedere l'analisi.")
+    st.info("In attesa del caricamento di tutti i 6 file richiesti...")
