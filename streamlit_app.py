@@ -132,36 +132,73 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
     t_perf, t_mkt, t_bud, t_marg = st.tabs(["📊 Performance Sales", "📢 Canali Marketing", "💰 Gestione Budget", "🏗️ Analisi Margini"])
 
     with t_perf:
-        st.subheader("🎯 Analisi Performance")
+        st.subheader("🎯 Analisi Performance Agenti")
+        
+        # Filtri in riga
         c1, c2 = st.columns(2)
         with c1:
-            # Lista pulita e ordinata di agenti
             lista_agenti = sorted([str(x) for x in master['Agente'].unique() if x is not None])
-            ag_sel = st.selectbox("Agente", lista_agenti)
+            ag_sel = st.selectbox("Seleziona Agente", lista_agenti)
         with c2:
             periodi = ["STORICO TOTALE"] + sorted([str(x) for x in master['Mese_Anno'].dropna().unique()], reverse=True)
-            per_sel = st.selectbox("Periodo", periodi)
+            per_sel = st.selectbox("Seleziona Periodo", periodi)
 
+        # Filtraggio dati
         df_ag = master[master['Agente'] == ag_sel]
         if per_sel != "STORICO TOTALE":
             df_ag = df_ag[df_ag['Mese_Anno'] == per_sel]
 
+        # Metric Cards (Box numerici in alto)
         k1, k2, k3, k4 = st.columns(4)
         k1.metric("Leads Ricevuti", len(df_ag))
         k2.metric("Sopralluoghi", int(df_ag['Sopralluogo'].sum()))
-        k3.metric("Contratti", int(df_ag['Cantiere'].sum()))
-        k4.metric("Closing Rate", f"{round(df_ag['Cantiere'].sum()/len(df_ag)*100, 1) if len(df_ag)>0 else 0}%")
+        k3.metric("Contratti Firmati", int(df_ag['Cantiere'].sum()))
+        
+        # Calcolo Closing Rate
+        conv = round(df_ag['Cantiere'].sum() / len(df_ag) * 100, 1) if len(df_ag) > 0 else 0
+        k4.metric("Closing Rate", f"{conv}%")
 
         st.divider()
+
+        # Grafici affiancati
         g1, g2 = st.columns([2, 3])
+        
         with g1:
             st.write("**Conversione (Funnel)**")
-            f_data = pd.DataFrame({'Fase':['Leads','Sopralluoghi','Contratti'], 'V':[len(df_ag), df_ag['Sopralluogo'].sum(), df_ag['Cantiere'].sum()]})
-            st.plotly_chart(px.funnel(f_data, x='V', y='Fase', color_discrete_sequence=['#000000']), use_container_width=True)
+            
+            # --- NUOVA LOGICA COLORI FUNNEL ---
+            f_data = pd.DataFrame({
+                'Fase': ['1. Leads', '2. Sopralluoghi', '3. Contratti'],
+                'Valore': [len(df_ag), df_ag['Sopralluogo'].sum(), df_ag['Cantiere'].sum()]
+            })
+            
+            # Mappatura colori Domei (Nero -> Grigio Scuro -> Grigio Medio)
+            color_map = {
+                '1. Leads': '#000000',      # Nero Puro (Base del logo)
+                '2. Sopralluoghi': '#333333', # Grigio Antracite
+                '3. Contratti': '#666666'    # Grigio Medio
+            }
+            
+            fig_funnel = px.funnel(f_data, x='Valore', y='Fase', color='Fase',
+                                   color_discrete_map=color_map)
+            
+            # Pulizia layout grafico
+            fig_funnel.update_layout(
+                showlegend=False, # Nascondiamo la legenda perché i nomi sono già sull'asse Y
+                margin=dict(l=20, r=20, t=20, b=20),
+                height=350
+            )
+            fig_funnel.update_traces(textinfo="value+percent initial") # Mostra numero e % rispetto all'inizio
+            
+            st.plotly_chart(fig_funnel, use_container_width=True)
+
         with g2:
             st.write("**Provenienza Leads**")
+            # Manteniamo il Rosso Domei per il grafico a barre per stacco visivo
             sorg = df_ag.groupby('Sorgente').size().reset_index(name='Q')
-            st.plotly_chart(px.bar(sorg, x='Sorgente', y='Q', color_discrete_sequence=['#FF4B4B']), use_container_width=True)
+            fig_bar = px.bar(sorg, x='Sorgente', y='Q', color_discrete_sequence=['#FF4B4B'])
+            fig_bar.update_layout(margin=dict(l=20, r=20, t=20, b=20), height=350)
+            st.plotly_chart(fig_bar, use_container_width=True)
 
     with t_mkt:
         st.subheader("Efficacia Canali")
