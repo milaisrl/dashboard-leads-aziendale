@@ -2,6 +2,32 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
+# --- SISTEMA DI PASSWORD ---
+def check_password():
+    if "password" not in st.secrets:
+        st.error("Configura la password nei Secrets di Streamlit!")
+        return False
+    
+    if "authenticated" not in st.session_state:
+        st.session_state["authenticated"] = False
+
+    if not st.session_state["authenticated"]:
+        pwd = st.text_input("Inserisci la password aziendale", type="password")
+        if pwd == st.secrets["password"]:
+            st.session_state["authenticated"] = True
+            st.rerun()
+        elif pwd:
+            st.error("Password errata")
+        return False
+    return True
+
+if not check_password():
+    st.stop()
+# --- FINE SISTEMA DI PASSWORD ---
+
+# Da qui in poi il tuo codice continua normalmente...
+st.set_page_config(page_title="Dashboard Leads Aziendale", layout="wide")
+# ...eccetera
 st.set_page_config(page_title="Dashboard Leads Aziendale", layout="wide")
 
 st.title("📊 Analisi Leads & Performance Agenti")
