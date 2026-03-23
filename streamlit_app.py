@@ -5,37 +5,47 @@ import re
 import os
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-from fpdf import FPDF
 
-# --- 1. CONFIGURAZIONE PAGINA & BRANDING DOMEI ---
-st.set_page_config(page_title="Domei Business Intelligence", layout="wide")
+# --- 1. CONFIGURAZIONE PAGINA & BRANDING ---
+st.set_page_config(page_title="Domei Intelligence", layout="wide")
 
-# CSS per allineare l'interfaccia al Brand Manual (Nero e Rosso Arancio)
+# Stile CSS Custom per rispecchiare il Brand Manual
 st.markdown("""
     <style>
     .main { background-color: #ffffff; }
-    div[data-testid="stMetricValue"] { color: #000000; font-family: 'Arial'; font-weight: bold; }
-    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
-    .stTabs [data-baseweb="tab"] { height: 50px; white-space: pre-wrap; background-color: #f1f1f1; border-radius: 4px 4px 0px 0px; gap: 1px; }
-    .stTabs [aria-selected="true"] { background-color: #000000 !important; color: white !important; }
-    .stButton>button { background-color: #000000; color: white; border-radius: 0px; width: 100%; border: none; }
-    .stButton>button:hover { background-color: #FF4B4B; color: white; }
+    /* Metriche stile Domei */
+    [data-testid="stMetric"] {
+        background-color: #f8f9fa;
+        border-left: 5px solid #000000;
+        padding: 15px;
+        border-radius: 5px;
+    }
+    /* Tabs */
+    .stTabs [data-baseweb="tab-list"] { gap: 10px; }
+    .stTabs [data-baseweb="tab"] {
+        background-color: #f1f1f1;
+        border-radius: 4px 4px 0px 0px;
+        padding: 10px 20px;
+    }
+    .stTabs [aria-selected="true"] {
+        background-color: #000000 !important;
+        color: white !important;
+    }
+    /* Bottoni */
+    .stButton>button {
+        background-color: #000000;
+        color: white;
+        border: none;
+        padding: 10px 25px;
+    }
+    .stButton>button:hover {
+        background-color: #FF4B4B;
+        color: white;
+    }
     </style>
     """, unsafe_allow_html=True)
 
 # --- 2. FUNZIONI TECNICHE ---
-def get_gsheet_client():
-    """Connessione a Google Sheets tramite Secrets"""
-    try:
-        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-        creds_info = st.secrets["gcp_service_account"]
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
-        client = gspread.authorize(creds)
-        return client.open("Domei_Database").worksheet("Marginalita")
-    except Exception as e:
-        st.error(f"Errore connessione Cloud: {e}")
-        return None
-
 def normalize_name(name):
     if pd.isna(name): return ""
     s = re.sub(r'[^a-zA-Z0-9\s]', '', str(name)).lower().strip()
@@ -48,29 +58,38 @@ def clean_currency(value):
     try: return float(value)
     except: return 0.0
 
-# --- 3. INIZIALIZZAZIONE SESSION STATE ---
+def get_gsheet_client():
+    try:
+        scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+        creds_info = st.secrets["gcp_service_account"]
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
+        client = gspread.authorize(creds)
+        return client.open("Domei_Database").worksheet("Marginalita")
+    except Exception as e:
+        st.sidebar.error(f"Errore Cloud: {e}")
+        return None
+
+# --- 3. INIZIALIZZAZIONE ---
 if 'budget_agenti' not in st.session_state:
-    st.session_state.budget_agenti = pd.DataFrame([{"Agente": "AGENTE TEST", "Mese": "2026-03", "Budget": 0.0}])
+    st.session_state.budget_agenti = pd.DataFrame([{"Agente": "ESEMPIO", "Mese": "2026-03", "Budget": 0.0}])
 
-if 'df_cloud' not in st.session_state:
-    st.session_state.df_cloud = pd.DataFrame(columns=['key', 'Manodopera', 'Materiali', 'Extra'])
-
-# --- 4. TESTATA ---
-col_l, col_t = st.columns([1, 4])
-with col_l:
+# --- 4. HEADER ---
+col_logo, col_title = st.columns([1, 5])
+with col_logo:
     if os.path.exists("logo.png"):
-        st.image("logo.png", width=150)
+        st.image("logo.png", width=140)
     else:
-        st.title("DOMEI")
-with col_t:
-    st.title("Business Intelligence & Controllo Margini")
-    st.write("Analisi integrata Sales & Marketing secondo Brand Guideline")
+        st.markdown("### DOMEI")
+
+with col_title:
+    st.title("Business Intelligence & Marginalità")
+    st.write("Controllo vendite, ROI marketing e gestione profitti")
 
 st.divider()
 
-# --- 5. CARICAMENTO FILE (SIDEBAR) ---
+# --- 5. SIDEBAR CARICAMENTO ---
 with st.sidebar:
-    st.header("📁 Importazione Dati")
+    st.header("📁 Importazione File")
     f_anal = st.file_uploader("1. ANALISI", type=['xlsx', 'csv'])
     f_list = st.file_uploader("2. LISTA LEADS", type=['xlsx', 'csv'])
     f_sopr = st.file_uploader("3. SOPRALLUOGHI", type=['xlsx', 'csv'])
@@ -79,104 +98,137 @@ with st.sidebar:
     f_fatt = st.file_uploader("6. FATTURATO", type=['xlsx', 'csv'])
 
 if all([f_anal, f_list, f_sopr, f_offe, f_cant, f_fatt]):
-    def load_df(f):
+    def load_and_clean(f):
         df = pd.read_csv(f, sep=None, engine='python') if f.name.endswith('.csv') else pd.read_excel(f)
         df.columns = df.columns.astype(str).str.strip()
-        date_col = [c for c in df.columns if 'Data' in c or 'inizio' in c.lower()]
-        if date_col:
-            df['Data_Ref'] = pd.to_datetime(df[date_col[0]], errors='coerce')
+        d_col = [c for c in df.columns if 'Data' in c or 'inizio' in c.lower()]
+        if d_col:
+            df['Data_Ref'] = pd.to_datetime(df[d_col[0]], errors='coerce')
             df['Mese_Anno'] = df['Data_Ref'].dt.strftime('%Y-%m')
-        return df.dropna(how='all')
+        return df
 
-    dfs = { "a": load_df(f_anal), "l": load_df(f_list), "s": load_df(f_sopr), 
-            "o": load_df(f_offe), "c": load_df(f_cant), "f": load_df(f_fatt) }
+    # Caricamento Dizionario Dataframe
+    dfs = {"a": load_and_clean(f_anal), "l": load_and_clean(f_list), "s": load_and_clean(f_sopr), 
+           "o": load_and_clean(f_offe), "c": load_and_clean(f_cant), "f": load_and_clean(f_fatt)}
 
-    # Normalizzazione e Chiavi
-    for k in dfs: dfs[k]['key'] = (dfs[k]['Cliente'] if 'Cliente' in dfs[k] else 
-                                  dfs[k]['Rag. Soc.'] if 'Rag. Soc.' in dfs[k] else 
-                                  dfs[k]['Ragione_sociale'] if 'Ragione_sociale' in dfs[k] else
-                                  dfs[k]['Descrizione conto']).apply(normalize_name)
+    # Creazione Chiavi Univoche
+    for k in dfs:
+        col_name = 'Cliente' if 'Cliente' in dfs[k] else 'Rag. Soc.' if 'Rag. Soc.' in dfs[k] else \
+                   'Ragione_sociale' if 'Ragione_sociale' in dfs[k] else 'Descrizione conto'
+        dfs[k]['key'] = dfs[k][col_name].apply(normalize_name)
 
-    # Valori Economici
+    # Pulizia Valori Economici
     dfs['c']['Valore_Contratto'] = dfs['c']['Totale'].apply(clean_currency)
     dfs['f']['Valore_Netto'] = dfs['f']['Imponibile in EUR' if 'Imponibile in EUR' in dfs['f'].columns else 'Totale'].apply(clean_currency)
 
-    # Master Data Construction
+    # Costruzione Master Data
     master = dfs['a'][dfs['a']['Tipo'] != 'WF Contatto cliente'].copy()
     master = pd.merge(master, dfs['l'].drop_duplicates('key')[['key', 'Agente', 'Sorgente']], on='key', how='left')
     
-    # Recupero Agente da Sopralluogo
+    # Recupero Agente (da lista o da sopralluogo)
     sopr_map = dfs['s'].drop_duplicates('key').set_index('key')['Creato da'].to_dict()
-    master['Agente'] = master.apply(lambda r: r['Agente'] if pd.notna(r['Agente']) and r['Agente']!="" else sopr_map.get(r['key'], "DA ASSEGNARE"), axis=1)
+    master['Agente'] = master.apply(lambda r: r['Agente'] if pd.notna(r['Agente']) and r['Agente']!="" else sopr_map.get(r['key'], "NON ASSEGNATO"), axis=1)
     
     master['Sopralluogo'] = master['key'].isin(dfs['s']['key'].unique())
     master['Cantiere'] = master['key'].isin(dfs['c']['key'].unique())
     master['Fatturato'] = master['key'].map(dfs['f'].groupby('key')['Valore_Netto'].sum()).fillna(0)
 
-    # --- 6. TABS ---
-    tab_p, tab_m, tab_b, tab_marg = st.tabs(["📊 Sales Performance", "📢 ROI Marketing", "💰 Budget", "🏗️ MARGINALITÀ"])
+    # --- 6. NAVIGAZIONE TABS ---
+    t_perf, t_mkt, t_bud, t_marg = st.tabs(["📊 Performance Sales", "📢 Canali Marketing", "💰 Gestione Budget", "🏗️ Analisi Margini"])
 
-    with tab_p:
-        st.subheader("Performance Agenti")
-        ag_sel = st.selectbox("Agente", sorted(master['Agente'].unique()))
+    # --- TAB PERFORMANCE AGENTI ---
+    with t_perf:
+        c1, c2 = st.columns(2)
+        with c1: ag_sel = st.selectbox("Agente", sorted(master['Agente'].unique()))
+        with c2: periodi = ["STORICO TOTALE"] + sorted(master['Mese_Anno'].dropna().unique(), reverse=True)
+                 per_sel = st.selectbox("Periodo", periodi)
+
         df_ag = master[master['Agente'] == ag_sel]
-        k1, k2, k3 = st.columns(3)
-        k1.metric("Leads", len(df_ag))
+        if per_sel != "STORICO TOTALE": df_ag = df_ag[df_ag['Mese_Anno'] == per_sel]
+
+        # Metric Cards
+        k1, k2, k3, k4 = st.columns(4)
+        k1.metric("Leads Ricevuti", len(df_ag))
         k2.metric("Sopralluoghi", int(df_ag['Sopralluogo'].sum()))
-        k3.metric("Fatturato", f"{df_ag['Fatturato'].sum():,.2f} €")
-        st.plotly_chart(px.funnel(pd.DataFrame({'Fase':['Leads','Sopr.'], 'Val':[len(df_ag), df_ag['Sopralluogo'].sum()]}), x='Val', y='Fase', color_discrete_sequence=['#000000']))
+        k3.metric("Contratti", int(df_ag['Cantiere'].sum()))
+        k4.metric("Closing Rate", f"{round(df_ag['Cantiere'].sum()/len(df_ag)*100, 1) if len(df_ag)>0 else 0}%")
 
-    with tab_m:
-        st.subheader("Efficacia Canali Marketing")
-        mkt = master.groupby('Sorgente').agg({'key':'count', 'Fatturato':'sum'}).reset_index()
-        st.plotly_chart(px.bar(mkt, x='Sorgente', y='Fatturato', title="Fatturato per Sorgente", color_discrete_sequence=['#FF4B4B']))
+        st.divider()
+        
+        # Grafici affiancati
+        g1, g2 = st.columns([2, 3])
+        with g1:
+            st.write("**Conversione (Funnel)**")
+            f_data = pd.DataFrame({'Fase':['Leads','Sopralluoghi','Contratti'], 'V':[len(df_ag), df_ag['Sopralluogo'].sum(), df_ag['Cantiere'].sum()]})
+            st.plotly_chart(px.funnel(f_data, x='V', y='Fase', color_discrete_sequence=['#000000']), use_container_width=True)
+        with g2:
+            st.write("**Provenienza Leads**")
+            sorg = df_ag.groupby('Sorgente').size().reset_index(name='Q')
+            st.plotly_chart(px.bar(sorg, x='Sorgente', y='Q', color_discrete_sequence=['#FF4B4B']), use_container_width=True)
 
-    with tab_b:
-        st.subheader("Gestione Investimenti")
+    # --- TAB MARKETING ---
+    with t_mkt:
+        st.subheader("Analisi Efficacia Canali Pubblicitari")
+        mkt_sum = master.groupby('Sorgente').agg({'key':'count', 'Cantiere':'sum', 'Fatturato':'sum'}).reset_index()
+        mkt_sum.columns = ['Sorgente', 'Leads', 'Contratti', 'Fatturato']
+        st.plotly_chart(px.pie(mkt_sum, values='Leads', names='Sorgente', title="Volume Leads per Canale", color_discrete_sequence=px.colors.sequential.Greys), use_container_width=True)
+        st.dataframe(mkt_sum, use_container_width=True)
+
+    # --- TAB BUDGET ---
+    with t_bud:
+        st.header("💰 Budget Marketing Mensile")
+        st.info("Inserisci qui la spesa pubblicitaria per agente e mese. Questi dati verranno usati per il calcolo del ROI.")
         st.session_state.budget_agenti = st.data_editor(st.session_state.budget_agenti, num_rows="dynamic", use_container_width=True)
 
-    with tab_marg:
-        st.header("Analisi Margini (Sincronizzato Cloud)")
+    # --- TAB MARGINALITÀ ---
+    with t_marg:
+        st.header("🏗️ Calcolo Margini Operativi (Domei Sync)")
         
-        # Caricamento da Cloud
-        if st.button("🔄 Sincronizza Dati da Cloud"):
-            client_sheet = get_gsheet_client()
-            if client_sheet:
-                st.session_state.df_cloud = pd.DataFrame(client_sheet.get_all_records())
-                st.success("Dati scaricati da Google Sheets!")
-
-        # Calcolo Quota Marketing
-        df_c_m = pd.merge(dfs['c'][['key', 'Rag. Soc.', 'Mese_Anno', 'Valore_Contratto']], master[['key', 'Agente']], on='key', how='left')
-        count_m = df_c_m.groupby(['Agente', 'Mese_Anno']).size().reset_index(name='N')
-        bud_m = pd.merge(st.session_state.budget_agenti, count_m, left_on=['Agente','Mese'], right_on=['Agente','Mese_Anno'], how='left')
-        bud_m['Quota_Mkt'] = (bud_m['Budget'] / bud_m['N']).fillna(0)
+        # Sincronizzazione Cloud
+        if st.button("🔄 Recupera Dati Salvati da Cloud"):
+            sheet = get_gsheet_client()
+            if sheet:
+                st.session_state.cloud_data = pd.DataFrame(sheet.get_all_records())
+                st.success("Dati sincronizzati!")
         
-        # Merge finale per tabella margini
-        final_marg = pd.merge(df_c_m, bud_m[['Agente', 'Mese', 'Quota_Mkt']], left_on=['Agente','Mese_Anno'], right_on=['Agente','Mese'], how='left')
+        # Preparazione Tabella Margini
+        df_marg = pd.merge(dfs['c'][['key', 'Rag. Soc.', 'Mese_Anno', 'Valore_Contratto']], master[['key', 'Agente']], on='key', how='left')
         
-        # Unione con i costi storici salvati su Cloud
-        final_marg = pd.merge(final_marg, st.session_state.df_cloud[['key', 'Manodopera', 'Materiali', 'Extra']], on='key', how='left')
-        for c in ['Manodopera', 'Materiali', 'Extra']: final_marg[c] = final_marg[c].fillna(0.0)
+        # Calcolo Quota Mkt
+        count_c = df_marg.groupby(['Agente', 'Mese_Anno']).size().reset_index(name='N')
+        bud_map = pd.merge(st.session_state.budget_agenti, count_c, left_on=['Agente','Mese'], right_on=['Agente','Mese_Anno'], how='left')
+        bud_map['Quota_Mkt'] = (bud_map['Budget'] / bud_map['N']).fillna(0)
+        
+        df_final = pd.merge(df_marg, bud_map[['Agente', 'Mese', 'Quota_Mkt']], left_on=['Agente','Mese_Anno'], right_on=['Agente','Mese'], how='left')
+        
+        # Unione con costi inseriti precedentemente (se esistono nel cloud)
+        if 'cloud_data' in st.session_state:
+            df_final = pd.merge(df_final, st.session_state.cloud_data[['key', 'Manodopera', 'Materiali', 'Extra']], on='key', how='left', suffixes=('', '_cloud'))
+            for c in ['Manodopera', 'Materiali', 'Extra']:
+                if f'{c}_cloud' in df_final.columns:
+                    df_final[c] = df_final[f'{c}_cloud'].fillna(0.0)
+        else:
+            for c in ['Manodopera', 'Materiali', 'Extra']: df_final[c] = 0.0
 
-        # Editor
-        df_edit = st.data_editor(
-            final_marg[['key', 'Rag. Soc.', 'Agente', 'Valore_Contratto', 'Quota_Mkt', 'Manodopera', 'Materiali', 'Extra']],
-            use_container_width=True, key="main_editor"
-        )
-
-        # Calcolo Totali
-        df_edit['Margine_€'] = df_edit['Valore_Contratto'] - (df_edit['Quota_Mkt'] + df_edit['Manodopera'] + df_edit['Materiali'] + df_edit['Extra'])
+        st.write("Inserisci i costi per calcolare la marginalità:")
+        edit_cols = ['key', 'Rag. Soc.', 'Agente', 'Valore_Contratto', 'Quota_Mkt', 'Manodopera', 'Materiali', 'Extra']
+        df_edit = st.data_editor(df_final[edit_cols], use_container_width=True, key="editor_margini")
+        
+        # Calcoli finali
+        df_edit['Tot_Costi'] = df_edit['Quota_Mkt'] + df_edit['Manodopera'] + df_edit['Materiali'] + df_edit['Extra']
+        df_edit['Margine_€'] = df_edit['Valore_Contratto'] - df_edit['Tot_Costi']
         df_edit['Margine_%'] = (df_edit['Margine_€'] / df_edit['Valore_Contratto'] * 100).round(1)
 
-        if st.button("💾 SALVA MODIFICHE SU CLOUD"):
-            client_sheet = get_gsheet_client()
-            if client_sheet:
-                client_sheet.clear()
-                client_sheet.update([df_edit.columns.values.tolist()] + df_edit.values.tolist())
-                st.success("Database Domei aggiornato!")
+        if st.button("💾 SALVA DEFINITIVAMENTE SU CLOUD"):
+            sheet = get_gsheet_client()
+            if sheet:
+                sheet.clear()
+                sheet.update([df_edit.columns.values.tolist()] + df_edit.values.tolist())
+                st.success("Dati Domei salvati con successo!")
 
-        st.subheader("Riepilogo Marginalità")
+        st.divider()
+        st.subheader("Analisi Profitto")
         st.dataframe(df_edit.style.background_gradient(subset=['Margine_%'], cmap='RdYlGn'), use_container_width=True)
 
 else:
-    st.warning("In attesa dei file storici Domei...")
+    st.info("👋 Benvenuto in Domei Intelligence. Per iniziare, carica i 6 file richiesti nella barra laterale.")
