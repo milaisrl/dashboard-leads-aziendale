@@ -1,81 +1,80 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 import re
-from thefuzz import process, fuzz # Serve per accoppiare i nomi scritti in modo diverso
 
 # --- CONFIGURAZIONE ---
-st.set_page_config(page_title="Domei Business Intelligence", layout="wide")
+st.set_page_config(page_title="Domei Intelligence", layout="wide")
 
-# Funzione di pulizia stringhe
-def clean_text(text):
+def clean_name(text):
     if pd.isna(text): return ""
-    text = str(text).lower().strip()
-    text = re.sub(r'\b(srl|s\.r\.l\.|spa|s\.p\.a\.|snc|sas|ss|ditta)\b', '', text)
-    return re.sub(r'[^a-z0-9]', '', text)
+    # Portiamo tutto in minuscolo, rimuoviamo spazi extra e punteggiatura
+    t = str(text).lower().strip()
+    t = re.sub(r'[^a-z0-9 ]', '', t)
+    return t
 
-# Funzione per trovare il match tra i nomi (Fuzzy Match)
-def get_match_score(name, list_to_check):
-    if not name or len(list_to_check) == 0: return 0
-    # Cerca il nome più simile nella lista e restituisce il punteggio di somiglianza
-    _, score = process.extractOne(name, list_to_check, scorer=fuzz.token_sort_ratio)
-    return score
-
-# --- CARICAMENTO FILE ---
+# --- CARICAMENTO DATI ---
 with st.sidebar:
-    st.header("📁 Caricamento Dati")
-    f_anal = st.file_uploader("1. ANALISI (Leads)", type=['xlsx'])
-    f_sopr = st.file_uploader("2. SOPRALLUOGHI", type=['xlsx'])
-    f_cant = st.file_uploader("3. CANTIERI (Contratti)", type=['xlsx'])
-    # Altri file omessi per brevità, aggiungili come i precedenti
+    st.header("📁 Carica i File Aggiornati")
+    f_anal = st.file_uploader("1. ANALISI", type=['xlsx'])
+    f_list = st.file_uploader("2. LISTA LEADS", type=['xlsx'])
+    f_sopr = st.file_uploader("3. ORDINI SOPRALLUOGO", type=['xlsx'])
+    f_cant = st.file_uploader("5. ORDINI CANTIERI", type=['xlsx'])
 
-if f_anal and f_sopr and f_cant:
-    # Lettura file
-    df_a = pd.read_excel(f_anal)
-    df_s = pd.read_excel(f_sopr)
-    df_c = pd.read_excel(f_cant)
+if f_anal and f_sopr and f_cant and f_list:
+    # Caricamento con gestione nomi colonne specifica per i tuoi file
+    df_a = pd.read_excel(f_anal) # Colonna: 'Cliente'
+    df_l = pd.read_excel(f_list) # Colonna: 'Ragione_sociale' e 'Agente'
+    df_s = pd.read_excel(f_sopr) # Colonna: 'Rag. Soc.'
+    df_c = pd.read_excel(f_cant) # Colonna: 'Rag. Soc.'
 
-    # Identificazione colonne Nome (cerca automaticamente la colonna più probabile)
-    def find_name_col(df):
-        cols = df.columns.tolist()
-        return next((c for c in cols if any(x in c.lower() for x in ['cliente', 'rag', 'nominativo'])), cols[0])
+    # Creazione Chiavi di Collegamento Pulite
+    df_a['key'] = df_a['Cliente'].apply(clean_name)
+    df_l['key'] = df_l['Ragione_sociale'].apply(clean_name)
+    df_s['key'] = df_s['Rag. Soc.'].apply(clean_name)
+    df_c['key'] = df_c['Rag. Soc.'].apply(clean_name)
 
-    col_a = find_name_col(df_a)
-    col_s = find_name_col(df_s)
-    col_c = find_name_col(df_c)
+    # Arricchimento Analisi con Agente dalla Lista Leads
+    # Usiamo drop_duplicates per evitare di moltiplicare le righe se un lead appare due volte
+    df_leads_info = df_l[['key', 'Agente', 'Sorgente']].drop_duplicates('key')
+    master = pd.merge(df_a, df_leads_info, on='key', how='left')
+    master['Agente'] = master['Agente'].fillna("NON ASSEGNATO")
 
-    # Pulizia nomi per il matching
-    df_a['key'] = df_a[col_a].apply(clean_text)
-    list_s = df_s[col_s].apply(clean_text).unique().tolist()
-    list_c = df_c[col_c].apply(clean_text).unique().tolist()
+    # --- CALCOLO PERFORMANCE ---
+    # Liste univoche di chi ha fatto sopralluogo o contratto
+    set_sopralluoghi = set(df_s['key'].unique())
+    set_contratti = set(df_c['key'].unique())
 
-    # --- LOGICA DEI CONTATORI (Il cuore del problema) ---
-    # Usiamo una soglia di somiglianza (85%) per decidere se è lo stesso cliente
-    with st.spinner("Sincronizzazione nomi in corso..."):
-        df_a['Sopralluogo_Match'] = df_a['key'].apply(lambda x: 1 if get_match_score(x, list_s) > 85 else 0)
-        df_a['Contratto_Match'] = df_a['key'].apply(lambda x: 1 if get_match_score(x, list_c) > 85 else 0)
+    master['Ha_Sopralluogo'] = master['key'].isin(set_sopralluoghi)
+    master['Ha_Contratto'] = master['key'].isin(set_contratti)
 
-    # --- DASHBOARD ---
-    st.title("📊 Statistiche Commerciali")
+    # --- INTERFACCIA ---
+    st.title("📊 Dashboard Domei Intelligence")
     
-    # Filtro Agente (Cerca colonna Agente nell'Analisi)
-    col_ag = next((c for c in df_a.columns if 'agente' in c.lower()), None)
-    if col_ag:
-        agente = st.selectbox("Seleziona Agente", sorted(df_a[col_ag].unique()))
-        df_filtered = df_a[df_a[col_ag] == agente]
-    else:
-        df_filtered = df_a
+    agente_sel = st.selectbox("Seleziona Agente", sorted(master['Agente'].unique()))
+    df_filtered = master[master['Agente'] == agente_sel]
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Leads", len(df_filtered))
-    c2.metric("Sopralluoghi", int(df_filtered['Sopralluogo_Match'].sum()))
-    c3.metric("Contratti", int(df_filtered['Contratto_Match'].sum()))
+    m1, m2, m3 = st.columns(3)
+    with m1:
+        st.metric("Leads Totali", len(df_filtered))
+    with m2:
+        n_sopr = df_filtered['Ha_Sopralluogo'].sum()
+        st.metric("Sopralluoghi", int(n_sopr))
+    with m3:
+        n_cont = df_filtered['Ha_Contratto'].sum()
+        st.metric("Contratti", int(n_cont))
 
-    # Debug Tabella
-    if st.checkbox("Mostra dati sincronizzati (Verifica Match)"):
-        st.write(df_filtered[[col_a, 'Sopralluogo_Match', 'Contratto_Match']].head(20))
+    st.divider()
+    
+    col_sx, col_dx = st.columns(2)
+    with col_sx:
+        fig_sorg = px.pie(df_filtered, names='Sorgente', title="Provenienza Leads")
+        st.plotly_chart(fig_sorg, use_container_width=True)
+    
+    with col_dx:
+        # Tabella di controllo per vedere chi "matcha"
+        st.subheader("Dettaglio Conversioni")
+        st.dataframe(df_filtered[[ 'Cliente', 'Ha_Sopralluogo', 'Ha_Contratto']].head(20))
 
 else:
-    st.info("Carica i file ANALISI, SOPRALLUOGHI e CANTIERI per vedere i dati.")
+    st.warning("Carica tutti i file richiesti per attivare i calcoli.")
