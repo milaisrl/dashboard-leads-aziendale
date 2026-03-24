@@ -1,80 +1,50 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import re
 
-# --- CONFIGURAZIONE ---
-st.set_page_config(page_title="Domei Intelligence", layout="wide")
+# Funzione di pulizia profonda
+def clean_string(s):
+    if pd.isna(s): return ""
+    return re.sub(r'[^a-z0-9]', '', str(s).lower())
 
-def clean_name(text):
-    if pd.isna(text): return ""
-    # Portiamo tutto in minuscolo, rimuoviamo spazi extra e punteggiatura
-    t = str(text).lower().strip()
-    t = re.sub(r'[^a-z0-9 ]', '', t)
-    return t
-
-# --- CARICAMENTO DATI ---
-with st.sidebar:
-    st.header("📁 Carica i File Aggiornati")
-    f_anal = st.file_uploader("1. ANALISI", type=['xlsx'])
-    f_list = st.file_uploader("2. LISTA LEADS", type=['xlsx'])
-    f_sopr = st.file_uploader("3. ORDINI SOPRALLUOGO", type=['xlsx'])
-    f_cant = st.file_uploader("5. ORDINI CANTIERI", type=['xlsx'])
-
+# Caricamento file (Assicurati che i nomi coincidano con i tuoi caricatori)
 if f_anal and f_sopr and f_cant and f_list:
-    # Caricamento con gestione nomi colonne specifica per i tuoi file
-    df_a = pd.read_excel(f_anal) # Colonna: 'Cliente'
-    df_l = pd.read_excel(f_list) # Colonna: 'Ragione_sociale' e 'Agente'
-    df_s = pd.read_excel(f_sopr) # Colonna: 'Rag. Soc.'
-    df_c = pd.read_excel(f_cant) # Colonna: 'Rag. Soc.'
+    df_a = pd.read_excel(f_anal) #
+    df_s = pd.read_excel(f_sopr) #
+    df_c = pd.read_excel(f_cant) #
+    df_l = pd.read_excel(f_list) #
 
-    # Creazione Chiavi di Collegamento Pulite
-    df_a['key'] = df_a['Cliente'].apply(clean_name)
-    df_l['key'] = df_l['Ragione_sociale'].apply(clean_name)
-    df_s['key'] = df_s['Rag. Soc.'].apply(clean_name)
-    df_c['key'] = df_c['Rag. Soc.'].apply(clean_name)
+    # 1. Creiamo set di chiavi pulite per sopralluoghi e cantieri
+    # Usiamo un set per una ricerca ultra-veloce
+    sopr_keys = set(df_s['Rag. Soc.'].apply(clean_string).unique())
+    cant_keys = set(df_c['Rag. Soc.'].apply(clean_string).unique())
 
-    # Arricchimento Analisi con Agente dalla Lista Leads
-    # Usiamo drop_duplicates per evitare di moltiplicare le righe se un lead appare due volte
-    df_leads_info = df_l[['key', 'Agente', 'Sorgente']].drop_duplicates('key')
-    master = pd.merge(df_a, df_leads_info, on='key', how='left')
-    master['Agente'] = master['Agente'].fillna("NON ASSEGNATO")
+    # 2. Colleghiamo l'Agente ai Lead dell'analisi
+    # Nota: Usiamo la Ragione_sociale della LISTA LEADS per trovare l'Agente
+    agent_map = df_l.set_index(df_l['Ragione_sociale'].apply(clean_string))['Agente'].to_dict()
 
-    # --- CALCOLO PERFORMANCE ---
-    # Liste univoche di chi ha fatto sopralluogo o contratto
-    set_sopralluoghi = set(df_s['key'].unique())
-    set_contratti = set(df_c['key'].unique())
+    def get_performance(row):
+        nome_pulito = clean_string(row['Cliente'])
+        # Cerchiamo se il nome dell'analisi esiste come sottostringa o match nei sopralluoghi
+        has_sopr = any(nome_pulito in s or s in nome_pulito for s in sopr_keys if nome_pulito != "")
+        has_cant = any(nome_pulito in c or c in nome_pulito for c in cant_keys if nome_pulito != "")
+        agente = agent_map.get(nome_pulito, "NON ASSEGNATO")
+        return pd.Series([has_sopr, has_cant, agente])
 
-    master['Ha_Sopralluogo'] = master['key'].isin(set_sopralluoghi)
-    master['Ha_Contratto'] = master['key'].isin(set_contratti)
+    # Applichiamo la logica riga per riga sul file Analisi
+    master = df_a.copy()
+    master[['Sopralluogo', 'Contratto', 'Agente_Reale']] = master.apply(get_performance, axis=1)
 
-    # --- INTERFACCIA ---
-    st.title("📊 Dashboard Domei Intelligence")
-    
-    agente_sel = st.selectbox("Seleziona Agente", sorted(master['Agente'].unique()))
-    df_filtered = master[master['Agente'] == agente_sel]
+    # 3. Filtro per Daniele (usando una ricerca parziale sul nome agente)
+    # Questo cattura sia "Daniele" che "NEW DDL DI DE LORENZI DANIELE"
+    df_daniele = master[master['Agente_Reale'].str.contains("DANIELE", case=False, na=False)]
 
-    m1, m2, m3 = st.columns(3)
-    with m1:
-        st.metric("Leads Totali", len(df_filtered))
-    with m2:
-        n_sopr = df_filtered['Ha_Sopralluogo'].sum()
-        st.metric("Sopralluoghi", int(n_sopr))
-    with m3:
-        n_cont = df_filtered['Ha_Contratto'].sum()
-        st.metric("Contratti", int(n_cont))
+    # Visualizzazione Metriche
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Leads Totali Daniele", len(df_daniele))
+    c2.metric("Sopralluoghi", int(df_daniele['Sopralluogo'].sum()))
+    c3.metric("Contratti", int(df_daniele['Contratto'].sum()))
 
-    st.divider()
-    
-    col_sx, col_dx = st.columns(2)
-    with col_sx:
-        fig_sorg = px.pie(df_filtered, names='Sorgente', title="Provenienza Leads")
-        st.plotly_chart(fig_sorg, use_container_width=True)
-    
-    with col_dx:
-        # Tabella di controllo per vedere chi "matcha"
-        st.subheader("Dettaglio Conversioni")
-        st.dataframe(df_filtered[[ 'Cliente', 'Ha_Sopralluogo', 'Ha_Contratto']].head(20))
-
-else:
-    st.warning("Carica tutti i file richiesti per attivare i calcoli.")
+    # TABELLA DI CONTROLLO: Per vedere chi manchi
+    if st.checkbox("Vedi dettaglio Lead Daniele (Verifica se mancano nomi)"):
+        st.write(df_daniele[['Cliente', 'Sopralluogo', 'Contratto', 'Agente_Reale']])
