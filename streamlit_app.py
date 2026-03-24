@@ -32,22 +32,21 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant]):
     df_o = pd.read_excel(f_offe)
     df_c = pd.read_excel(f_cant)
 
-    # 1. Pulizia Date e Filtro Lead (La base di tutto)
-    # Usiamo la colonna 'Data Inizio' per il file ANALISI
+    # 1. Identifichiamo i LEADS di interesse (Creati dal 01/12/2025)
+    # Usiamo la colonna 'Data Inizio' del file ANALISI
     df_a['Data_DT'] = pd.to_datetime(df_a['Data Inizio'], errors='coerce')
     df_a_filtered = df_a[df_a['Data_DT'] >= DATA_START].copy()
     
-    # 2. Creazione Chiavi Univoche
+    # 2. Pulizia nomi per il matching
     df_a_filtered['key'] = df_a_filtered['Cliente'].apply(clean_key)
     df_l['key'] = df_l['Ragione_sociale'].apply(clean_key)
     
-    # Creiamo set di chiavi per Sopralluoghi, Offerte e Cantieri (senza filtri data qui, 
-    # perché un lead di dicembre può avere un cantiere a febbraio)
+    # Creiamo i set di chi ha fatto cosa (su tutto il database per non perdere la cronologia)
     set_sopr = set(df_s['Rag. Soc.'].apply(clean_key).unique())
     set_offe = set(df_o['Rag. Soc.'].apply(clean_key).unique())
     set_cant = set(df_c['Rag. Soc.'].apply(clean_key).unique())
 
-    # 3. Mappatura Agente da LISTA LEADS
+    # 3. Assegnazione Agente (Dalla LISTA LEADS)
     map_agente = df_l.set_index('key')['Agente'].to_dict()
     df_a_filtered['Agente'] = df_a_filtered['key'].map(map_agente).fillna("NON ASSEGNATO")
 
@@ -55,31 +54,33 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant]):
     agenti = sorted([str(x) for x in df_a_filtered['Agente'].unique()])
     sel_agente = st.selectbox("👤 Seleziona Agente", agenti)
     
-    # Filtriamo il dataframe finale
+    # Filtriamo i lead dell'agente selezionato nati dopo il 1° Dicembre
     df_final = df_a_filtered[df_a_filtered['Agente'] == sel_agente].copy()
 
-    # 5. CONTEGGIO REALE (Per riga di lead)
-    # Verifichiamo per ogni lead se ha generato le fasi successive
-    df_final['Ha_Sopr'] = df_final['key'].apply(lambda x: 1 if x in set_sopr else 0)
-    df_final['Ha_Offe'] = df_final['key'].apply(lambda x: 1 if x in set_offe else 0)
-    df_final['Ha_Cant'] = df_final['key'].apply(lambda x: 1 if x in set_cant else 0)
+    # 5. CONTEGGIO "A CASCATA" (L'unico modo per avere dati coerenti)
+    # Un lead viene contato come 'Sopralluogo' solo se il suo nome è nel file sopralluoghi
+    df_final['S'] = df_final['key'].apply(lambda x: 1 if x in set_sopr else 0)
+    # Un lead viene contato come 'Offerta' solo se ha fatto il sopralluogo E il nome è in offerte
+    df_final['O'] = df_final.apply(lambda r: 1 if (r['S'] == 1 and r['key'] in set_offe) else 0, axis=1)
+    # Un lead diventa 'Contratto' solo se ha passato le fasi precedenti E il nome è in cantieri
+    df_final['C'] = df_final.apply(lambda r: 1 if (r['O'] == 1 and r['key'] in set_cant) else 0, axis=1)
 
-    # Metriche Finali
+    # Metriche
     n_leads = len(df_final)
-    n_sopr = df_final['Ha_Sopr'].sum()
-    n_offe = df_final['Ha_Offe'].sum()
-    n_cant = df_final['Ha_Cant'].sum()
+    n_sopr = df_final['S'].sum()
+    n_offe = df_final['O'].sum()
+    n_cant = df_final['C'].sum()
 
-    # --- UI ---
-    st.markdown(f"### Performance Reali: **{sel_agente}** (Dal 01/12/2025)")
+    # --- VISUALIZZAZIONE ---
+    st.markdown(f"### Report Coerente: **{sel_agente}**")
+    st.caption("Analisi basata sui Lead creati dal 01/12/2025 e la loro evoluzione")
     
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Leads", n_leads)
+    c1.metric("Leads Nuovi", n_leads)
     c2.metric("Sopralluoghi", int(n_sopr))
     c3.metric("Offerte", int(n_offe))
     c4.metric("Contratti", int(n_cant))
 
-    # Funnel con ordine logico decrescente
     fig = go.Figure(go.Funnel(
         y = ["Leads", "Sopralluoghi", "Offerte", "Contratti"],
         x = [n_leads, n_sopr, n_offe, n_cant],
@@ -88,9 +89,10 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant]):
     ))
     st.plotly_chart(fig, use_container_width=True)
 
-    # Tabella di Verifica
-    with st.expander("📝 Verifica i nomi dei Lead e le conversioni"):
-        st.dataframe(df_final[['Cliente', 'Ha_Sopr', 'Ha_Offe', 'Ha_Cant']])
+    # Tabella di controllo per l'utente
+    with st.expander("📝 Tabella di Verifica (Perché i numeri sono questi?)"):
+        st.write("Questa tabella mostra solo i lead nati dal 1° Dicembre e se hanno proseguito nel funnel:")
+        st.dataframe(df_final[['Cliente', 'S', 'O', 'C']].rename(columns={'S':'Sopralluogo ok', 'O':'Offerta ok', 'C':'Contratto ok'}))
 
 else:
-    st.info("Carica i file per correggere il funnel.")
+    st.info("Carica i file per generare il funnel corretto.")
