@@ -4,58 +4,82 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import re
 
-# --- CONNESSIONE GOOGLE SHEETS ---
+# --- CONFIGURAZIONE ---
+st.set_page_config(page_title="Domei Intelligence", layout="wide")
+
+# --- CONNESSIONE GOOGLE SHEETS (DB) ---
 def init_gsheet():
+    # Usa le credenziali salvate nei Secrets di Streamlit Cloud
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    # Utilizziamo i secrets per la sicurezza
-    creds_dict = st.secrets["gcp_service_account"]
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(st.secrets["gcp_service_account"], scope)
     client = gspread.authorize(creds)
+    # Apre il file che abbiamo visto nello screenshot
     return client.open("Domei_Database").worksheet("Marginalita")
 
-# --- PULIZIA AUTOMATICA ---
+# --- FUNZIONE PULIZIA (L'arma segreta contro gli errori manuali) ---
 def normalize_name(name):
     if pd.isna(name): return ""
+    # Rimuove spazi doppi, caratteri speciali e mette in ordine alfabetico le parole
+    # Così "Rossi Luigi" e "Luigi Rossi " diventano la stessa chiave
     return " ".join(sorted(re.sub(r'[^a-zA-Z0-9\s]', '', str(name)).lower().strip().split()))
 
-# --- CORE APP ---
+# --- INTERFACCIA ---
 st.title("Statistiche Commerciali & Marginalità")
 
-# Caricamento file (come da tuoi screenshot)
-f_cantieri = st.sidebar.file_uploader("Carica File Cantieri", type=['xlsx'])
+with st.sidebar:
+    f_cantieri = st.file_uploader("Carica File Cantieri", type=['xlsx'])
 
 if f_cantieri:
+    # 1. Lettura dati dal file Excel caricato
     df_c = pd.read_excel(f_cantieri)
-    # Pulizia nomi automatica per evitare errori dell'impiegata
-    df_c['key'] = df_c['Ragione_Sociale'].apply(normalize_name)
+    df_c.columns = df_c.columns.astype(str).str.strip()
     
-    st.subheader("Calcolo Marginalità")
-    
-    # Integramo con i dati già presenti sul foglio Google per non sovrascrivere il lavoro fatto
-    sheet = init_gsheet()
-    existing_data = pd.DataFrame(sheet.get_all_records())
-    
-    # Creiamo la tabella per l'inserimento rapido (Manodopera, Materiali, Extra)
-    # L'app cercherà di pre-compilare se i dati esistono già nel DB
-    df_merge = pd.merge(df_c[['key', 'Ragione_Sociale', 'Totale']], 
-                        existing_data[['key', 'Manodopera', 'Materiali', 'Extra']], 
-                        on='key', how='left').fillna(0)
-    
-    edited_df = st.data_editor(df_merge, num_rows="dynamic")
+    # Cerchiamo la colonna ragione sociale (gestisce diverse varianti nel nome colonna)
+    col_rag = next((c for c in df_c.columns if 'Rag' in c or 'Cliente' in c), df_c.columns[0])
+    df_c['key'] = df_c[col_rag].apply(normalize_name)
+    df_c['Rag_Soc_Pulita'] = df_c[col_rag]
 
+    # 2. Recupero dati storici dal Google Sheet
+    try:
+        sheet = init_gsheet()
+        existing_data = pd.DataFrame(sheet.get_all_records())
+        if not existing_data.empty:
+            # Uniamo i dati caricati con quelli già salvati (per non perdere Manodopera/Materiali già inseriti)
+            df_final = pd.merge(df_c[['key', 'Rag_Soc_Pulita', 'Totale']], 
+                                existing_data[['key', 'Manodopera', 'Materiali', 'Extra']], 
+                                on='key', how='left').fillna(0)
+        else:
+            df_final = df_c[['key', 'Rag_Soc_Pulita', 'Totale']].copy()
+            for col in ['Manodopera', 'Materiali', 'Extra']: df_final[col] = 0.0
+    except Exception as e:
+        st.error(f"Errore connessione DB: {e}")
+        df_final = df_c[['key', 'Rag_Soc_Pulita', 'Totale']].copy()
+
+    # 3. Tabella Editabile (L'unico punto dove l'impiegata deve intervenire)
+    st.subheader("Inserimento Costi di Cantiere")
+    edited_df = st.data_editor(df_final, column_config={"key": None}, use_container_width=True)
+
+    # 4. Salvataggio
     if st.button("💾 Salva e Sincronizza su Google Sheets"):
-        # Trasformiamo il dataframe per il foglio Google (10 colonne come da tuo screen)
-        # Aggiungiamo Mese_Anno e Quota_Mkt calcolata
-        edited_df['Mese_Anno'] = pd.Timestamp.now().strftime('%Y-%m')
+        # Preparazione dati per le 10 colonne dello screenshot
+        # key, Rag. Soc., Agente, Valore_Contratto, Quota_Mkt, Manodopera, Materiali, Extra, Mese_Anno
+        output_df = edited_df.copy()
+        output_df['Mese_Anno'] = pd.Timestamp.now().strftime('%Y-%m')
         
-        # Pulizia foglio e aggiornamento (Automazione totale)
+        # Aggiorna il foglio
         sheet.clear()
-        sheet.update([edited_df.columns.values.tolist()] + edited_df.values.tolist())
-        st.success("Dati salvati con successo nel Domei_Database!")
+        sheet.update([output_df.columns.values.tolist()] + output_df.values.tolist())
+        st.success("Sincronizzazione completata!")
 
-    # Visualizzazione ROI (come da tuoi screenshot)
+    # 5. Visualizzazione Risultati (ROI)
+    total_fatt = edited_df['Totale'].sum()
+    total_costi = edited_df[['Manodopera', 'Materiali', 'Extra']].sum().sum()
+    
     st.divider()
-    st.subheader("Performance Economica")
-    total_valore = edited_df['Totale'].sum()
-    total_costi = edited_df['Manodopera'].sum() + edited_df['Materiali'].sum() + edited_df['Extra'].sum()
-    st.metric("Margine Aziendale", f"{total_valore - total_costi:,.2f} €", f"{((total_valore - total_costi)/total_valore*100 if total_valore > 0 else 0):.1f}%")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Fatturato Caricato", f"{total_fatt:,.2f} €")
+    m2.metric("Costi Totali", f"{total_costi:,.2f} €")
+    m3.metric("Margine Operativo", f"{total_fatt - total_costi:,.2f} €", f"{((total_fatt-total_costi)/total_fatt*100 if total_fatt>0 else 0):.1f}%")
+
+else:
+    st.info("👋 In attesa del file Excel dei Cantieri per generare la tabella di marginalità.")
