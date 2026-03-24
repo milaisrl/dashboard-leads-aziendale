@@ -1,45 +1,29 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 import re
-from datetime import datetime
 
-# --- 1. CONFIGURAZIONE E LOGO ---
+# --- CONFIGURAZIONE ---
 st.set_page_config(page_title="Domei Intelligence", layout="wide")
+DATA_START = pd.to_datetime("2025-12-01")
 
-# Visualizzazione Logo
-col_logo, _ = st.columns([1, 4])
-with col_logo:
-    try:
-        st.image("logo.png", use_container_width=True)
-    except:
-        st.title("🏠 Domei Intelligence")
-
-# --- 2. COSTANTI E FUNZIONI ---
-DATA_INIZIO_STORICA = pd.to_datetime("2025-12-01")
-
-def normalize_key(text):
+def clean_key(text):
     if pd.isna(text): return ""
     return re.sub(r'[^a-z0-9]', '', str(text).lower().strip())
 
-# --- 3. SIDEBAR: CARICAMENTO E FILTRI ---
+# --- LOGO ---
+try: st.image("logo.png", width=200)
+except: st.title("🏠 Domei Intelligence")
+
+# --- CARICAMENTO ---
 with st.sidebar:
-    st.header("📁 Database Excel")
+    st.header("📁 Carica Database")
     f_anal = st.file_uploader("1. ANALISI (Leads)", type=['xlsx'])
     f_list = st.file_uploader("2. LISTA LEADS", type=['xlsx'])
     f_sopr = st.file_uploader("3. SOPRALLUOGHI", type=['xlsx'])
     f_offe = st.file_uploader("4. OFFERTE", type=['xlsx'])
     f_cant = st.file_uploader("5. ORDINI CANTIERI", type=['xlsx'])
 
-    st.divider()
-    st.header("📅 Periodo di Analisi")
-    st.info(f"Analisi bloccata dal: {DATA_INIZIO_STORICA.strftime('%d/%m/%Y')}")
-    
-    opzione_tempo = st.selectbox("Seleziona intervallo:", 
-                                ["Tutto (dal 01/12/25)", "Ultimi 30 giorni", "Ultimi 90 giorni"])
-
-# --- 4. LOGICA DI ELABORAZIONE ---
 if all([f_anal, f_list, f_sopr, f_offe, f_cant]):
     # Lettura
     df_a = pd.read_excel(f_anal)
@@ -48,79 +32,65 @@ if all([f_anal, f_list, f_sopr, f_offe, f_cant]):
     df_o = pd.read_excel(f_offe)
     df_c = pd.read_excel(f_cant)
 
-    # Conversione Date e Filtro Hard al 01/12/2025
-    def filter_date(df):
-        col_data = next((c for c in df.columns if 'Data' in c), None)
-        if col_data:
-            df[col_data] = pd.to_datetime(df[col_data], errors='coerce')
-            return df[df[col_data] >= DATA_INIZIO_STORICA]
-        return df
-
-    df_a = filter_date(df_a)
-    df_s = filter_date(df_s)
-    df_o = filter_date(df_o)
-    df_c = filter_date(df_c)
-
-    # Ulteriore filtro basato sulla scelta utente
-    oggi = pd.Timestamp.now()
-    if opzione_tempo == "Ultimi 30 giorni":
-        df_a = df_a[df_a.iloc[:,0] >= (oggi - pd.Timedelta(days=30))]
-    elif opzione_tempo == "Ultimi 90 giorni":
-        df_a = df_a[df_a.iloc[:,0] >= (oggi - pd.Timedelta(days=90))]
-
-    # Matching e Agenti
-    df_a['key'] = df_a['Cliente'].apply(normalize_key)
-    df_l['key'] = df_l['Ragione_sociale'].apply(normalize_key)
-    df_s['key'] = df_s['Rag. Soc.'].apply(normalize_key)
-    df_o['key'] = df_o['Rag. Soc.'].apply(normalize_key)
-    df_c['key'] = df_c['Rag. Soc.'].apply(normalize_key)
-
-    # Mappa agenti cross-file (per non perdere Daniele)
-    map_agente = df_l.set_index('key')['Agente'].to_dict()
-    df_a['Agente'] = df_a['key'].map(map_agente).fillna("NON ASSEGNATO")
-
-    # Flag Conversioni
-    df_a['S'] = df_a['key'].isin(set(df_s['key']))
-    df_a['O'] = df_a['key'].isin(set(df_o['key']))
-    df_a['C'] = df_a['key'].isin(set(df_c['key']))
-
-    # --- 5. VISUALIZZAZIONE ---
-    agenti = sorted([str(x) for x in df_a['Agente'].unique()])
-    sel_agente = st.selectbox("👤 Seleziona Agente", agenti)
-    df_final = df_a[df_a['Agente'] == sel_agente]
-
-    # Metriche
-    tot_l = len(df_final)
-    tot_s = df_final['S'].sum()
-    tot_o = df_final['O'].sum()
-    tot_c = df_final['C'].sum()
-
-    # Layout Dashboard
-    st.markdown(f"### Performance di **{sel_agente}**")
+    # 1. Pulizia Date e Filtro Lead (La base di tutto)
+    # Usiamo la colonna 'Data Inizio' per il file ANALISI
+    df_a['Data_DT'] = pd.to_datetime(df_a['Data Inizio'], errors='coerce')
+    df_a_filtered = df_a[df_a['Data_DT'] >= DATA_START].copy()
     
-    col_met1, col_met2, col_met3 = st.columns(3)
-    col_met1.metric("Leads", tot_l)
-    col_met2.metric("Sopralluoghi", int(tot_s), f"{int(tot_s/tot_l*100 if tot_l>0 else 0)}% conv.")
-    col_met3.metric("Contratti", int(tot_c), f"{int(tot_c/tot_l*100 if tot_l>0 else 0)}% conv.")
+    # 2. Creazione Chiavi Univoche
+    df_a_filtered['key'] = df_a_filtered['Cliente'].apply(clean_key)
+    df_l['key'] = df_l['Ragione_sociale'].apply(clean_key)
+    
+    # Creiamo set di chiavi per Sopralluoghi, Offerte e Cantieri (senza filtri data qui, 
+    # perché un lead di dicembre può avere un cantiere a febbraio)
+    set_sopr = set(df_s['Rag. Soc.'].apply(clean_key).unique())
+    set_offe = set(df_o['Rag. Soc.'].apply(clean_key).unique())
+    set_cant = set(df_c['Rag. Soc.'].apply(clean_key).unique())
 
-    st.divider()
+    # 3. Mappatura Agente da LISTA LEADS
+    map_agente = df_l.set_index('key')['Agente'].to_dict()
+    df_a_filtered['Agente'] = df_a_filtered['key'].map(map_agente).fillna("NON ASSEGNATO")
 
-    # FUNNEL GRAFICO
+    # 4. Selezione Agente
+    agenti = sorted([str(x) for x in df_a_filtered['Agente'].unique()])
+    sel_agente = st.selectbox("👤 Seleziona Agente", agenti)
+    
+    # Filtriamo il dataframe finale
+    df_final = df_a_filtered[df_a_filtered['Agente'] == sel_agente].copy()
+
+    # 5. CONTEGGIO REALE (Per riga di lead)
+    # Verifichiamo per ogni lead se ha generato le fasi successive
+    df_final['Ha_Sopr'] = df_final['key'].apply(lambda x: 1 if x in set_sopr else 0)
+    df_final['Ha_Offe'] = df_final['key'].apply(lambda x: 1 if x in set_offe else 0)
+    df_final['Ha_Cant'] = df_final['key'].apply(lambda x: 1 if x in set_cant else 0)
+
+    # Metriche Finali
+    n_leads = len(df_final)
+    n_sopr = df_final['Ha_Sopr'].sum()
+    n_offe = df_final['Ha_Offe'].sum()
+    n_cant = df_final['Ha_Cant'].sum()
+
+    # --- UI ---
+    st.markdown(f"### Performance Reali: **{sel_agente}** (Dal 01/12/2025)")
+    
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Leads", n_leads)
+    c2.metric("Sopralluoghi", int(n_sopr))
+    c3.metric("Offerte", int(n_offe))
+    c4.metric("Contratti", int(n_cant))
+
+    # Funnel con ordine logico decrescente
     fig = go.Figure(go.Funnel(
         y = ["Leads", "Sopralluoghi", "Offerte", "Contratti"],
-        x = [tot_l, tot_s, tot_o, tot_c],
+        x = [n_leads, n_sopr, n_offe, n_cant],
         textinfo = "value+percent initial",
-        marker = {"color": ["#11305D", "#1D56A5", "#4A90E2", "#A6CEF7"]} # Colori professionali blu/azzurro
+        marker = {"color": ["#002147", "#003366", "#004080", "#0052A5"]}
     ))
-    fig.update_layout(title_text="Funnel di Conversione", height=450, font=dict(size=14))
     st.plotly_chart(fig, use_container_width=True)
 
-    # TABELLA DETTAGLIO
-    with st.expander("🔍 Analisi dettagliata nominativi (Periodo Selezionato)"):
-        st.dataframe(
-            df_final[['Cliente', 'S', 'O', 'C']].rename(columns={'S':'Sopralluogo', 'O':'Offerta', 'C':'Contratto'}),
-            use_container_width=True
-        )
+    # Tabella di Verifica
+    with st.expander("📝 Verifica i nomi dei Lead e le conversioni"):
+        st.dataframe(df_final[['Cliente', 'Ha_Sopr', 'Ha_Offe', 'Ha_Cant']])
 
 else:
-    st.warning("⚠️ Caricare tutti i file richiesti per visualizzare l'analisi dal 1 Dicembre 2025.")
+    st.info("Carica i file per correggere il funnel.")
