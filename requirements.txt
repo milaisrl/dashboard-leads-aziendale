@@ -1,8 +1,7 @@
-streamlit
 pandas
 openpyxl
-plotly
-fpdf
+xlrd
 gspread
 oauth2client
-matplotlib
+plotly
+streamlit
