@@ -5,3 +5,4 @@ xlrd
 gspread
 oauth2client
 plotly
+thefuzz
